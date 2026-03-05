@@ -37,7 +37,7 @@ AgentDNS is a self-hosted alternative to Vercel/Netlify preview deployments, bui
 
 ### 1. Get a domain + server
 
-- Buy a cheap domain (e.g. `vibeyard.io`, `mypreview.sh`)
+- Buy a cheap domain (e.g. `routeroot.dev`, `mypreview.sh`)
 - Get a server (Hetzner CX22 for $5/mo, or any VPS with Docker)
 - At your registrar, set nameservers: `ns1.yourdomain.dev` → your server IP
 
@@ -243,7 +243,7 @@ Environment variables: `AGENTDNS_URL`, `AGENTDNS_API_KEY`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AGENTDNS_DOMAIN` | `agentdns.dev` | Your domain |
+| `AGENTDNS_DOMAIN` | `routeroot.dev` | Your domain |
 | `AGENTDNS_SERVER_IP` | `127.0.0.1` | Server public IP |
 | `AGENTDNS_API_KEY` | `dev-key` | API authentication key |
 | `AGENTDNS_MAX_DEPLOYMENTS` | `20` | Max concurrent deployments |

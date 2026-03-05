@@ -6,17 +6,17 @@
 }
 
 # Root domain — serves the dashboard
-{$AGENTDNS_DOMAIN:agentdns.dev} {
+{$AGENTDNS_DOMAIN:routeroot.dev} {
     reverse_proxy agent-api:8053
 }
 
 # API subdomain
-api.{$AGENTDNS_DOMAIN:agentdns.dev} {
+api.{$AGENTDNS_DOMAIN:routeroot.dev} {
     reverse_proxy agent-api:8053
 }
 
 # All other subdomains — on-demand TLS + dynamic routing via Caddy API
-*.{$AGENTDNS_DOMAIN:agentdns.dev} {
+*.{$AGENTDNS_DOMAIN:routeroot.dev} {
     tls {
         on_demand
     }

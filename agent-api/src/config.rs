@@ -18,7 +18,7 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Self {
         Self {
-            domain: env::var("AGENTDNS_DOMAIN").unwrap_or_else(|_| "agentdns.dev".into()),
+            domain: env::var("AGENTDNS_DOMAIN").unwrap_or_else(|_| "routeroot.dev".into()),
             server_ip: env::var("AGENTDNS_SERVER_IP").unwrap_or_else(|_| "127.0.0.1".into()),
             api_key: env::var("AGENTDNS_API_KEY").unwrap_or_else(|_| "dev-key".into()),
             max_deployments: env::var("AGENTDNS_MAX_DEPLOYMENTS")
@@ -36,7 +36,7 @@ impl Config {
             database_path: env::var("DATABASE_PATH")
                 .unwrap_or_else(|_| "/data/agentdns.db".into()),
             zone_file_path: env::var("ZONE_FILE_PATH")
-                .unwrap_or_else(|_| "/dns-zones/db.agentdns.dev".into()),
+                .unwrap_or_else(|_| "/dns-zones/db.routeroot.dev".into()),
         }
     }
 }

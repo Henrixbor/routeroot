@@ -9,7 +9,7 @@ services:
       - ./coredns/Corefile:/etc/coredns/Corefile:ro
       - ./coredns/zones:/etc/coredns/zones
     environment:
-      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-agentdns.dev}
+      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-routeroot.dev}
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8054/health"]
       interval: 15s
@@ -28,7 +28,7 @@ services:
       - caddy_config:/config
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     environment:
-      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-agentdns.dev}
+      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-routeroot.dev}
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:2019/config/"]
       interval: 15s
@@ -46,7 +46,7 @@ services:
       - ./coredns/zones:/dns-zones
       - ./data:/data
     environment:
-      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-agentdns.dev}
+      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-routeroot.dev}
       - AGENTDNS_SERVER_IP=${AGENTDNS_SERVER_IP}
       - AGENTDNS_API_KEY=${AGENTDNS_API_KEY}
       - AGENTDNS_MAX_DEPLOYMENTS=${AGENTDNS_MAX_DEPLOYMENTS:-20}
@@ -57,7 +57,7 @@ services:
       - AGENTDNS_GITHUB_WEBHOOK_SECRET=${AGENTDNS_GITHUB_WEBHOOK_SECRET:-}
       - AGENTDNS_LOG_FORMAT=${AGENTDNS_LOG_FORMAT:-human}
       - DATABASE_PATH=/data/agentdns.db
-      - ZONE_FILE_PATH=/dns-zones/db.${AGENTDNS_DOMAIN:-agentdns.dev}
+      - ZONE_FILE_PATH=/dns-zones/db.${AGENTDNS_DOMAIN:-routeroot.dev}
     depends_on:
       coredns:
         condition: service_healthy
