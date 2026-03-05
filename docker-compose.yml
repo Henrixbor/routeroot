@@ -8,6 +8,14 @@ services:
     volumes:
       - ./coredns/Corefile:/etc/coredns/Corefile:ro
       - ./coredns/zones:/etc/coredns/zones
+    environment:
+      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-agentdns.dev}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8054/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: always
 
   caddy:
@@ -21,6 +29,12 @@ services:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     environment:
       - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-agentdns.dev}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2019/config/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: always
 
   agent-api:
@@ -41,10 +55,20 @@ services:
       - AGENTDNS_MAX_CPUS=${AGENTDNS_MAX_CPUS:-2}
       - AGENTDNS_CADDY_ADMIN=http://caddy:2019
       - AGENTDNS_GITHUB_WEBHOOK_SECRET=${AGENTDNS_GITHUB_WEBHOOK_SECRET:-}
+      - AGENTDNS_LOG_FORMAT=${AGENTDNS_LOG_FORMAT:-human}
       - DATABASE_PATH=/data/agentdns.db
+      - ZONE_FILE_PATH=/dns-zones/db.${AGENTDNS_DOMAIN:-agentdns.dev}
     depends_on:
-      - coredns
-      - caddy
+      coredns:
+        condition: service_healthy
+      caddy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8053/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: always
 
 volumes:

@@ -37,25 +37,34 @@ AgentDNS is a self-hosted alternative to Vercel/Netlify preview deployments, bui
 
 ### 1. Get a domain + server
 
-- Buy a cheap domain (e.g. `agentdns.dev`, `mypreview.sh`)
+- Buy a cheap domain (e.g. `vibeyard.io`, `mypreview.sh`)
 - Get a server (Hetzner CX22 for $5/mo, or any VPS with Docker)
 - At your registrar, set nameservers: `ns1.yourdomain.dev` → your server IP
 
-### 2. Deploy AgentDNS
+### 2. One-command setup
 
 ```bash
-# On your server:
+# On your server (Ubuntu/Debian):
 git clone https://github.com/Vibeyard/AgentDNS.git
 cd AgentDNS
+sudo bash scripts/setup.sh
+```
 
-# Configure
+That's it. The script will:
+- Install Docker if needed
+- Ask for your domain and detect your server IP
+- Generate a secure API key
+- Create zone files for your domain
+- Build and start all services
+- Install a systemd service (auto-start on reboot)
+- Install a watchdog cron (self-healing every 2 minutes)
+
+### Manual setup (if you prefer)
+
+```bash
 cp .env.example .env
 # Edit .env: set AGENTDNS_DOMAIN, AGENTDNS_SERVER_IP, AGENTDNS_API_KEY
-
-# Launch
 docker compose up -d
-
-# Verify
 curl http://localhost:8053/api/health
 ```
 
