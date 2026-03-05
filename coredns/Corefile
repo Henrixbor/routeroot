@@ -1,0 +1,8 @@
+.:53 {
+    file /etc/coredns/zones/db.{$AGENTDNS_DOMAIN:agentdns.dev} {$AGENTDNS_DOMAIN:agentdns.dev}
+    reload 5s
+    log
+    errors
+    health :8054
+    ready :8055
+}

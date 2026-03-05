@@ -1,0 +1,52 @@
+services:
+  coredns:
+    image: coredns/coredns:latest
+    command: -conf /etc/coredns/Corefile
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+    volumes:
+      - ./coredns/Corefile:/etc/coredns/Corefile:ro
+      - ./coredns/zones:/etc/coredns/zones
+    restart: always
+
+  caddy:
+    image: caddy:latest
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    environment:
+      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-agentdns.dev}
+    restart: always
+
+  agent-api:
+    build: ./agent-api
+    ports:
+      - "8053:8053"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./coredns/zones:/dns-zones
+      - ./data:/data
+    environment:
+      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-agentdns.dev}
+      - AGENTDNS_SERVER_IP=${AGENTDNS_SERVER_IP}
+      - AGENTDNS_API_KEY=${AGENTDNS_API_KEY}
+      - AGENTDNS_MAX_DEPLOYMENTS=${AGENTDNS_MAX_DEPLOYMENTS:-20}
+      - AGENTDNS_DEFAULT_TTL=${AGENTDNS_DEFAULT_TTL:-48h}
+      - AGENTDNS_MAX_MEMORY=${AGENTDNS_MAX_MEMORY:-2048}
+      - AGENTDNS_MAX_CPUS=${AGENTDNS_MAX_CPUS:-2}
+      - AGENTDNS_CADDY_ADMIN=http://caddy:2019
+      - AGENTDNS_GITHUB_WEBHOOK_SECRET=${AGENTDNS_GITHUB_WEBHOOK_SECRET:-}
+      - DATABASE_PATH=/data/agentdns.db
+    depends_on:
+      - coredns
+      - caddy
+    restart: always
+
+volumes:
+  caddy_data:
+  caddy_config:

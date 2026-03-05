@@ -1,0 +1,26 @@
+{
+    on_demand_tls {
+        ask http://agent-api:8053/api/tls-check
+    }
+    admin :2019
+}
+
+# Root domain — serves the dashboard
+{$AGENTDNS_DOMAIN:agentdns.dev} {
+    reverse_proxy agent-api:8053
+}
+
+# API subdomain
+api.{$AGENTDNS_DOMAIN:agentdns.dev} {
+    reverse_proxy agent-api:8053
+}
+
+# All other subdomains — on-demand TLS + dynamic routing via Caddy API
+*.{$AGENTDNS_DOMAIN:agentdns.dev} {
+    tls {
+        on_demand
+    }
+    # Default: Caddy API routes are injected dynamically by agent-api
+    # This block is a fallback for subdomains without a registered route
+    respond "Deployment not found. Deploy with: agentdns deploy <repo>" 404
+}
