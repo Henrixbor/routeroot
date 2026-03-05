@@ -157,6 +157,15 @@ pub async fn create_deployment(
     };
 
     state.db.insert_deployment(&deployment)?;
+    tracing::info!(
+        name = %name,
+        repo = %req.repo,
+        branch = %branch,
+        environment = %environment,
+        url = %url,
+        ttl_secs = ttl_secs,
+        "deployment created"
+    );
     audit(&state, "deploy_started", "deployment", &name, &serde_json::json!({
         "repo": req.repo, "branch": branch, "environment": environment
     }));
@@ -197,9 +206,11 @@ async fn do_build_and_deploy(
     repo: &str,
     branch: &str,
 ) -> Result<(), AppError> {
+    tracing::info!(name = %name, phase = "clone_build", "starting clone and build");
     let (image_tag, container_port) = builder::clone_and_build(repo, branch, name).await?;
     let port = allocate_port(name);
 
+    tracing::info!(name = %name, phase = "container", image = %image_tag, host_port = port, container_port = container_port, "starting container");
     let container_id = state.docker.run_container(
         name,
         &image_tag,
@@ -209,9 +220,11 @@ async fn do_build_and_deploy(
         state.config.max_cpus,
     ).await?;
 
+    tracing::info!(name = %name, phase = "proxy", "registering proxy route");
     state.proxy.add_route(name, &state.config.domain, port).await?;
     state.db.update_deployment_status(name, "running", Some(&container_id), Some(port))?;
 
+    tracing::info!(name = %name, phase = "complete", container_id = %container_id, host_port = port, "deployment live");
     Ok(())
 }
 

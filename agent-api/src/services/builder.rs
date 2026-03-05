@@ -3,6 +3,7 @@ use std::process::Command;
 use crate::error::AppError;
 
 /// Clone a repo and build a Docker image for it.
+/// Captures and returns build output for debugging.
 pub async fn clone_and_build(repo: &str, branch: &str, name: &str) -> Result<(String, u16), AppError> {
     let work_dir = PathBuf::from("/tmp/agentdns-builds").join(name);
 
@@ -13,18 +14,29 @@ pub async fn clone_and_build(repo: &str, branch: &str, name: &str) -> Result<(St
     std::fs::create_dir_all(&work_dir)
         .map_err(|e| AppError::Internal(format!("failed to create build dir: {e}")))?;
 
-    // Clone
-    let clone_status = Command::new("git")
+    // Clone — capture output for debugging
+    tracing::info!(repo = %repo, branch = %branch, name = %name, "cloning repository");
+    let clone_output = Command::new("git")
         .args(["clone", "--depth", "1", "--branch", branch, repo, work_dir.to_str().unwrap()])
-        .status()
-        .map_err(|e| AppError::Internal(format!("git clone failed: {e}")))?;
+        .output()
+        .map_err(|e| AppError::Internal(format!("git clone failed to execute: {e}")))?;
 
-    if !clone_status.success() {
-        return Err(AppError::BadRequest(format!("git clone failed for {repo}@{branch}")));
+    if !clone_output.status.success() {
+        let stderr = String::from_utf8_lossy(&clone_output.stderr);
+        tracing::error!(repo = %repo, branch = %branch, stderr = %stderr, "git clone failed");
+        return Err(AppError::BadRequest(format!(
+            "git clone failed for {repo}@{branch}: {stderr}"
+        )));
     }
 
     // Detect build type and get container port
     let (dockerfile_content, container_port) = detect_and_generate_dockerfile(&work_dir)?;
+    tracing::info!(
+        name = %name,
+        container_port = container_port,
+        generated_dockerfile = dockerfile_content.is_some(),
+        "build type detected"
+    );
 
     // Write Dockerfile if we generated one
     if let Some(content) = dockerfile_content {
@@ -32,17 +44,28 @@ pub async fn clone_and_build(repo: &str, branch: &str, name: &str) -> Result<(St
             .map_err(|e| AppError::Internal(format!("failed to write Dockerfile: {e}")))?;
     }
 
-    // Build Docker image
+    // Build Docker image — capture output
     let image_tag = format!("agentdns-{name}:latest");
-    let build_status = Command::new("docker")
+    tracing::info!(image = %image_tag, "building docker image");
+    let build_output = Command::new("docker")
         .args(["build", "-t", &image_tag, "."])
         .current_dir(&work_dir)
-        .status()
-        .map_err(|e| AppError::Internal(format!("docker build failed: {e}")))?;
+        .output()
+        .map_err(|e| AppError::Internal(format!("docker build failed to execute: {e}")))?;
 
-    if !build_status.success() {
-        return Err(AppError::Internal("docker build failed".into()));
+    if !build_output.status.success() {
+        let stderr = String::from_utf8_lossy(&build_output.stderr);
+        let stdout = String::from_utf8_lossy(&build_output.stdout);
+        // Log last 50 lines of build output for debugging
+        let combined = format!("{stdout}\n{stderr}");
+        let last_lines: String = combined.lines().rev().take(50).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+        tracing::error!(name = %name, build_output = %last_lines, "docker build failed");
+        return Err(AppError::Internal(format!(
+            "docker build failed for '{name}':\n{last_lines}"
+        )));
     }
+
+    tracing::info!(name = %name, image = %image_tag, "docker build complete");
 
     // Cleanup build dir
     std::fs::remove_dir_all(&work_dir).ok();
@@ -51,11 +74,17 @@ pub async fn clone_and_build(repo: &str, branch: &str, name: &str) -> Result<(St
 }
 
 /// Returns (optional generated Dockerfile content, container port).
-/// If the repo already has a Dockerfile, returns (None, 3000) — assumes port 3000 as default.
 fn detect_and_generate_dockerfile(work_dir: &Path) -> Result<(Option<String>, u16), AppError> {
     // Already has a Dockerfile — use it as-is
     if work_dir.join("Dockerfile").exists() {
-        return Ok((None, 3000));
+        // Try to detect EXPOSE port from existing Dockerfile
+        let dockerfile = std::fs::read_to_string(work_dir.join("Dockerfile")).unwrap_or_default();
+        let port = dockerfile.lines()
+            .find(|l| l.trim().starts_with("EXPOSE"))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(3000);
+        return Ok((None, port));
     }
 
     // Node.js project
@@ -111,6 +140,25 @@ CMD ["/server"]
         return Ok((Some(dockerfile.into()), 3000));
     }
 
+    // Python project
+    if work_dir.join("requirements.txt").exists() || work_dir.join("pyproject.toml").exists() {
+        let pip_install = if work_dir.join("requirements.txt").exists() {
+            "RUN pip install --no-cache-dir -r requirements.txt"
+        } else {
+            "RUN pip install --no-cache-dir ."
+        };
+        let dockerfile = format!(
+            r#"FROM python:3.12-slim
+WORKDIR /app
+COPY . .
+{pip_install}
+EXPOSE 8000
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+"#
+        );
+        return Ok((Some(dockerfile), 8000));
+    }
+
     // Static site (fallback)
     if work_dir.join("index.html").exists() {
         let dockerfile = r#"FROM caddy:alpine
@@ -121,6 +169,6 @@ EXPOSE 80
     }
 
     Err(AppError::BadRequest(
-        "Could not detect project type. Add a Dockerfile to your repo.".into(),
+        "Could not detect project type. Supported: Dockerfile, Node.js, Rust, Go, Python, static HTML. Add a Dockerfile to your repo.".into(),
     ))
 }

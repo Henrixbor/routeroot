@@ -22,11 +22,33 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("agent_api=info".parse()?))
-        .init();
+    // JSON structured logging for agent-parseable output
+    let json_logging = std::env::var("AGENTDNS_LOG_FORMAT").unwrap_or_default() == "json";
+
+    if json_logging {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(EnvFilter::from_default_env().add_directive("agent_api=info".parse()?))
+            .with_target(true)
+            .with_thread_ids(false)
+            .with_file(true)
+            .with_line_number(true)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::from_default_env().add_directive("agent_api=info".parse()?))
+            .init();
+    }
 
     let config = config::Config::from_env();
+    tracing::info!(
+        domain = %config.domain,
+        server_ip = %config.server_ip,
+        max_deployments = config.max_deployments,
+        max_memory_mb = config.max_memory_mb,
+        "AgentDNS starting"
+    );
+
     let db = db::Database::new(&config.database_path)?;
     db.migrate()?;
 
