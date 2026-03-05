@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use rusqlite::{Connection, params};
 use serde::Serialize;
 use std::sync::Mutex;

@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
-use serde::{Deserialize, Serialize};
-use std::env;
+use serde::Deserialize;
 
 #[derive(Parser)]
 #[command(name = "agentdns", about = "AgentDNS CLI — deploy branches as live URLs")]

@@ -1,6 +1,5 @@
 use bollard::Docker;
-use bollard::container::{Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions, StopContainerOptions};
-use bollard::image::BuildImageOptions;
+use bollard::container::{Config, CreateContainerOptions, LogsOptions, RemoveContainerOptions, StopContainerOptions};
 use bollard::models::{HostConfig, PortBinding};
 use std::collections::HashMap;
 use futures_util::StreamExt;

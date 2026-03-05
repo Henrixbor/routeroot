@@ -5,7 +5,7 @@ mod error;
 mod routes;
 mod services;
 
-use axum::{Router, middleware};
+use axum::Router;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;

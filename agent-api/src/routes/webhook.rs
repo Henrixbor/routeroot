@@ -20,7 +20,7 @@ pub struct GitHubRepo {
 
 pub async fn github_webhook(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(payload): Json<GitHubPushEvent>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // TODO: verify X-Hub-Signature-256 with webhook secret
@@ -55,7 +55,7 @@ pub async fn github_webhook(
         state.db.delete_deployment(&name)?;
     }
 
-    // Trigger deploy via the same create flow
+    // Trigger deploy via the create endpoint
     let req = super::deploy::CreateDeployRequest {
         repo: payload.repository.clone_url,
         branch: Some(branch),
@@ -63,9 +63,8 @@ pub async fn github_webhook(
         ttl: None,
     };
 
-    // Reuse create_deployment logic by calling it inline
-    // For now, return accepted and let it build
-    Ok(Json(serde_json::json!({ "action": "deploying", "name": name })))
+    let result = super::deploy::create_deployment(State(state), Json(req)).await?;
+    Ok(Json(serde_json::json!({ "action": "deploying", "name": result.name, "url": result.url })))
 }
 
 fn sanitize(s: &str) -> String {
