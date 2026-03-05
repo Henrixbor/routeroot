@@ -2,7 +2,10 @@ use axum::{Json, extract::{Path, State}};
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::{AppState, db::DnsRecord, error::AppError};
+use crate::{AppState, db::{AuditEvent, DnsRecord}, error::AppError};
+
+const PROTECTED_RECORD_TYPES: &[&str] = &["NS", "SOA", "CAA"];
+const PROTECTED_RECORD_NAMES: &[&str] = &["@", "ns1", "ns2"];
 
 #[derive(Deserialize)]
 pub struct CreateRecordRequest {
@@ -15,18 +18,36 @@ pub async fn create_record(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateRecordRequest>,
 ) -> Result<Json<DnsRecord>, AppError> {
+    let record_type = req.record_type.unwrap_or_else(|| "A".into());
+
+    // Block protected record types
+    if PROTECTED_RECORD_TYPES.iter().any(|t| t.eq_ignore_ascii_case(&record_type)) {
+        return Err(AppError::BadRequest(format!(
+            "cannot create {record_type} records — NS, SOA, and CAA records are protected"
+        )));
+    }
+
+    // Block protected names
+    if PROTECTED_RECORD_NAMES.iter().any(|n| n.eq_ignore_ascii_case(&req.name)) {
+        return Err(AppError::BadRequest(format!(
+            "cannot modify record '{}' — this name is protected", req.name
+        )));
+    }
+
     let record = DnsRecord {
         id: uuid::Uuid::new_v4().to_string(),
         name: req.name,
-        record_type: req.record_type.unwrap_or_else(|| "A".into()),
+        record_type,
         value: req.value,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
 
     state.db.insert_dns_record(&record)?;
-
-    // Regenerate zone file with all records
     regenerate_zone(&state)?;
+
+    audit(&state, "record_created", "dns_record", &record.name, &serde_json::json!({
+        "type": record.record_type, "value": record.value
+    }));
 
     Ok(Json(record))
 }
@@ -41,8 +62,17 @@ pub async fn delete_record(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Block protected names from deletion
+    if PROTECTED_RECORD_NAMES.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
+        return Err(AppError::BadRequest(format!(
+            "cannot delete record '{}' — this name is protected", name
+        )));
+    }
+
     state.db.delete_dns_record(&name)?;
     regenerate_zone(&state)?;
+    audit(&state, "record_deleted", "dns_record", &name, &serde_json::json!({}));
+
     Ok(Json(serde_json::json!({ "deleted": name })))
 }
 
@@ -53,4 +83,17 @@ fn regenerate_zone(state: &AppState) -> Result<(), AppError> {
         .map(|r| (r.name, r.record_type, r.value))
         .collect();
     state.dns.write_zone(&tuples)
+}
+
+fn audit(state: &AppState, action: &str, resource_type: &str, resource_name: &str, details: &serde_json::Value) {
+    let event = AuditEvent {
+        id: uuid::Uuid::new_v4().to_string(),
+        action: action.to_string(),
+        resource_type: resource_type.to_string(),
+        resource_name: resource_name.to_string(),
+        actor: "api".to_string(),
+        details: details.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    state.db.insert_audit(&event).ok();
 }

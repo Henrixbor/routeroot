@@ -15,14 +15,25 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .with_state(state.clone());
 
     let protected = Router::new()
+        // Deploy
         .route("/deploy", post(deploy::create_deployment))
         .route("/deploy/{name}", delete(deploy::delete_deployment))
+        .route("/deploy/{name}/promote", post(deploy::promote_deployment))
+        // Plan/Apply
+        .route("/plan", post(deploy::create_plan))
+        .route("/plan/{plan_id}/apply", post(deploy::apply_plan))
+        .route("/plans", get(deploy::list_plans))
+        // Deployments
         .route("/deployments", get(deploy::list_deployments))
         .route("/deployments/{name}", get(deploy::get_deployment))
         .route("/deployments/{name}/logs", get(deploy::get_deployment_logs))
+        // DNS Records
         .route("/records", post(records::create_record))
         .route("/records", get(records::list_records))
         .route("/records/{name}", delete(records::delete_record))
+        // Audit
+        .route("/audit", get(deploy::list_audit))
+        // Webhooks
         .route("/webhook/github", post(webhook::github_webhook))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_api_key))
         .with_state(state);

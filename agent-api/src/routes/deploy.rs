@@ -2,7 +2,7 @@ use axum::{Json, extract::{Path, State}};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{AppState, db::Deployment, error::AppError, services::builder};
+use crate::{AppState, db::{AuditEvent, Deployment, DeployPlan}, error::AppError, services::{builder, verify}};
 
 #[derive(Deserialize)]
 pub struct CreateDeployRequest {
@@ -10,6 +10,7 @@ pub struct CreateDeployRequest {
     pub branch: Option<String>,
     pub name: Option<String>,
     pub ttl: Option<String>,
+    pub environment: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -17,13 +18,22 @@ pub struct DeployResponse {
     pub name: String,
     pub url: String,
     pub status: String,
+    pub environment: String,
 }
 
-pub async fn create_deployment(
+#[derive(Deserialize)]
+pub struct PromoteRequest {
+    pub target: String, // "staging" or "production"
+}
+
+// --- Plan/Apply ---
+
+pub async fn create_plan(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateDeployRequest>,
-) -> Result<Json<DeployResponse>, AppError> {
+) -> Result<Json<DeployPlan>, AppError> {
     let branch = req.branch.unwrap_or_else(|| "main".into());
+    let environment = req.environment.as_deref().unwrap_or("preview");
     let name = req.name.unwrap_or_else(|| {
         sanitize_name(&format!("{}-{}", repo_short_name(&req.repo), &branch))
     });
@@ -32,11 +42,97 @@ pub async fn create_deployment(
     let count = state.db.count_active_deployments()?;
     if count >= state.config.max_deployments {
         return Err(AppError::LimitReached(format!(
-            "max {0} deployments reached", state.config.max_deployments
+            "max {} deployments reached", state.config.max_deployments
         )));
     }
 
-    // Check for existing
+    if state.db.get_deployment(&name)?.is_some() {
+        return Err(AppError::Conflict(format!("deployment '{name}' already exists")));
+    }
+
+    let url = format!("https://{}.{}", name, state.config.domain);
+    let port = allocate_port(&name);
+
+    let actions = serde_json::json!([
+        {"action": "clone_repo", "repo": req.repo, "branch": branch},
+        {"action": "build_image", "tag": format!("agentdns-{name}:latest")},
+        {"action": "create_container", "name": name, "port": port, "memory_mb": state.config.max_memory_mb, "cpus": state.config.max_cpus},
+        {"action": "add_proxy_route", "subdomain": name, "target_port": port},
+        {"action": "verify_deployment", "url": url, "dns_check": true, "http_check": true},
+    ]);
+
+    let plan = DeployPlan {
+        id: uuid::Uuid::new_v4().to_string(),
+        repo: req.repo,
+        branch,
+        name,
+        environment: environment.to_string(),
+        url,
+        ttl: req.ttl,
+        actions: actions.to_string(),
+        status: "pending".into(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    state.db.insert_plan(&plan)?;
+    audit(&state, "plan_created", "plan", &plan.id, &serde_json::json!({"name": plan.name, "repo": plan.repo}));
+
+    Ok(Json(plan))
+}
+
+pub async fn apply_plan(
+    State(state): State<Arc<AppState>>,
+    Path(plan_id): Path<String>,
+) -> Result<Json<DeployResponse>, AppError> {
+    let plan = state.db.get_plan(&plan_id)?
+        .ok_or_else(|| AppError::NotFound(format!("plan '{plan_id}' not found")))?;
+
+    if plan.status != "pending" {
+        return Err(AppError::BadRequest(format!("plan is already '{}'", plan.status)));
+    }
+
+    state.db.update_plan_status(&plan_id, "applied")?;
+
+    // Execute the deploy using the plan details
+    let req = CreateDeployRequest {
+        repo: plan.repo,
+        branch: Some(plan.branch),
+        name: Some(plan.name),
+        ttl: plan.ttl,
+        environment: Some(plan.environment),
+    };
+
+    audit(&state, "plan_applied", "plan", &plan_id, &serde_json::json!({}));
+
+    create_deployment(State(state), Json(req)).await
+}
+
+pub async fn list_plans(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<DeployPlan>>, AppError> {
+    Ok(Json(state.db.list_plans()?))
+}
+
+// --- Deploy ---
+
+pub async fn create_deployment(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateDeployRequest>,
+) -> Result<Json<DeployResponse>, AppError> {
+    let branch = req.branch.unwrap_or_else(|| "main".into());
+    let environment = req.environment.unwrap_or_else(|| "preview".into());
+    let name = req.name.unwrap_or_else(|| {
+        sanitize_name(&format!("{}-{}", repo_short_name(&req.repo), &branch))
+    });
+
+    // Check limits
+    let count = state.db.count_active_deployments()?;
+    if count >= state.config.max_deployments {
+        return Err(AppError::LimitReached(format!(
+            "max {} deployments reached", state.config.max_deployments
+        )));
+    }
+
     if state.db.get_deployment(&name)?.is_some() {
         return Err(AppError::Conflict(format!("deployment '{name}' already exists")));
     }
@@ -53,14 +149,19 @@ pub async fn create_deployment(
         container_id: None,
         port: None,
         status: "building".into(),
+        verified: None,
+        environment: environment.clone(),
         url: url.clone(),
         created_at: chrono::Utc::now().to_rfc3339(),
         expires_at: Some(expires_at.to_rfc3339()),
     };
 
     state.db.insert_deployment(&deployment)?;
+    audit(&state, "deploy_started", "deployment", &name, &serde_json::json!({
+        "repo": req.repo, "branch": branch, "environment": environment
+    }));
 
-    // Spawn build + deploy in background
+    // Spawn build + deploy + verify in background
     let state_clone = state.clone();
     let name_clone = name.clone();
     let repo_clone = req.repo.clone();
@@ -68,10 +169,16 @@ pub async fn create_deployment(
 
     tokio::spawn(async move {
         match do_build_and_deploy(&state_clone, &name_clone, &repo_clone, &branch_clone).await {
-            Ok(_) => tracing::info!("deployment '{name_clone}' is live"),
+            Ok(_) => {
+                tracing::info!("deployment '{name_clone}' is live, starting verification");
+                audit(&state_clone, "deploy_live", "deployment", &name_clone, &serde_json::json!({}));
+                // Start verification
+                verify::verify_deployment(state_clone, name_clone).await;
+            }
             Err(e) => {
                 tracing::error!("deployment '{name_clone}' failed: {e}");
                 state_clone.db.update_deployment_status(&name_clone, "failed", None, None).ok();
+                audit(&state_clone, "deploy_failed", "deployment", &name_clone, &serde_json::json!({"error": e.to_string()}));
             }
         }
     });
@@ -80,6 +187,7 @@ pub async fn create_deployment(
         name,
         url,
         status: "building".into(),
+        environment,
     }))
 }
 
@@ -89,13 +197,9 @@ async fn do_build_and_deploy(
     repo: &str,
     branch: &str,
 ) -> Result<(), AppError> {
-    // Clone and build
     let (image_tag, container_port) = builder::clone_and_build(repo, branch, name).await?;
-
-    // Allocate a host port (simple: 32000 + hash of name)
     let port = allocate_port(name);
 
-    // Run container
     let container_id = state.docker.run_container(
         name,
         &image_tag,
@@ -105,14 +209,53 @@ async fn do_build_and_deploy(
         state.config.max_cpus,
     ).await?;
 
-    // Register proxy route
     state.proxy.add_route(name, &state.config.domain, port).await?;
-
-    // Update DB
     state.db.update_deployment_status(name, "running", Some(&container_id), Some(port))?;
 
     Ok(())
 }
+
+// --- Promote ---
+
+pub async fn promote_deployment(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<PromoteRequest>,
+) -> Result<Json<DeployResponse>, AppError> {
+    let target = req.target.to_lowercase();
+    if target != "staging" && target != "production" {
+        return Err(AppError::BadRequest("target must be 'staging' or 'production'".into()));
+    }
+
+    let deployment = state.db.get_deployment(&name)?
+        .ok_or_else(|| AppError::NotFound(format!("deployment '{name}' not found")))?;
+
+    if deployment.status != "running" {
+        return Err(AppError::BadRequest(format!("deployment must be running, got '{}'", deployment.status)));
+    }
+
+    // Update environment
+    let new_url = format!("https://{}.{}", name, state.config.domain);
+    state.db.update_deployment_environment(&name, &target, &new_url)?;
+
+    // Remove TTL for promoted deployments (don't auto-expire production)
+    if target == "production" {
+        state.db.clear_deployment_expiry(&name).ok();
+    }
+
+    audit(&state, "deploy_promoted", "deployment", &name, &serde_json::json!({
+        "from": deployment.environment, "to": target
+    }));
+
+    Ok(Json(DeployResponse {
+        name,
+        url: new_url,
+        status: deployment.status,
+        environment: target,
+    }))
+}
+
+// --- CRUD ---
 
 pub async fn delete_deployment(
     State(state): State<Arc<AppState>>,
@@ -127,6 +270,7 @@ pub async fn delete_deployment(
 
     state.proxy.remove_route(&name).await.ok();
     state.db.delete_deployment(&name)?;
+    audit(&state, "deploy_deleted", "deployment", &name, &serde_json::json!({}));
 
     Ok(Json(serde_json::json!({ "deleted": name })))
 }
@@ -160,7 +304,30 @@ pub async fn get_deployment_logs(
     Ok(Json(logs))
 }
 
-fn sanitize_name(s: &str) -> String {
+// --- Audit ---
+
+pub async fn list_audit(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<crate::db::AuditEvent>>, AppError> {
+    Ok(Json(state.db.list_audit(100)?))
+}
+
+fn audit(state: &AppState, action: &str, resource_type: &str, resource_name: &str, details: &serde_json::Value) {
+    let event = AuditEvent {
+        id: uuid::Uuid::new_v4().to_string(),
+        action: action.to_string(),
+        resource_type: resource_type.to_string(),
+        resource_name: resource_name.to_string(),
+        actor: "api".to_string(),
+        details: details.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    state.db.insert_audit(&event).ok();
+}
+
+// --- Helpers ---
+
+pub(crate) fn sanitize_name(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' })
         .collect::<String>()

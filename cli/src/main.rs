@@ -18,41 +18,58 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Deploy a repo branch
+    /// Deploy a repo branch directly
     Deploy {
-        /// Git repo URL
         repo: String,
-        /// Branch name
         #[arg(short, long, default_value = "main")]
         branch: String,
-        /// Custom subdomain name
         #[arg(short, long)]
         name: Option<String>,
-        /// Time-to-live (e.g. 24h, 7d)
         #[arg(short, long)]
         ttl: Option<String>,
+        #[arg(short, long, default_value = "preview")]
+        environment: String,
+    },
+    /// Create a deployment plan (dry-run)
+    Plan {
+        repo: String,
+        #[arg(short, long, default_value = "main")]
+        branch: String,
+        #[arg(short, long)]
+        name: Option<String>,
+        #[arg(short, long)]
+        ttl: Option<String>,
+    },
+    /// Apply a pending deployment plan
+    Apply {
+        /// Plan ID
+        plan_id: String,
+    },
+    /// List deployment plans
+    Plans,
+    /// Promote a deployment to staging or production
+    Promote {
+        name: String,
+        /// Target environment (staging or production)
+        target: String,
     },
     /// List active deployments
     Ls,
     /// Get deployment details
-    Status {
-        /// Deployment name
-        name: String,
-    },
+    Status { name: String },
     /// Get deployment logs
-    Logs {
-        /// Deployment name
-        name: String,
-    },
+    Logs { name: String },
     /// Tear down a deployment
-    Down {
-        /// Deployment name
-        name: String,
-    },
+    Down { name: String },
     /// Manage DNS records
     Record {
         #[command(subcommand)]
         action: RecordAction,
+    },
+    /// View audit log
+    Audit {
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
     },
     /// Check system health
     Health,
@@ -78,6 +95,7 @@ struct DeployResponse {
     name: String,
     url: String,
     status: String,
+    environment: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -86,6 +104,8 @@ struct Deployment {
     repo: String,
     branch: String,
     status: String,
+    verified: Option<String>,
+    environment: Option<String>,
     url: String,
     created_at: String,
 }
@@ -104,6 +124,31 @@ struct HealthResponse {
     active_deployments: usize,
 }
 
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct DeployPlan {
+    id: String,
+    name: String,
+    repo: String,
+    branch: String,
+    environment: String,
+    url: String,
+    actions: String,
+    status: String,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct AuditEvent {
+    action: String,
+    resource_type: String,
+    resource_name: String,
+    actor: String,
+    details: String,
+    created_at: String,
+}
+
 fn main() {
     let cli = Cli::parse();
     let client = reqwest::blocking::Client::new();
@@ -111,147 +156,236 @@ fn main() {
     let auth = format!("Bearer {}", cli.key);
 
     match cli.command {
-        Commands::Deploy { repo, branch, name, ttl } => {
+        Commands::Deploy { repo, branch, name, ttl, environment } => {
             let body = serde_json::json!({
-                "repo": repo,
-                "branch": branch,
-                "name": name,
-                "ttl": ttl,
+                "repo": repo, "branch": branch, "name": name, "ttl": ttl, "environment": environment,
             });
-            let resp: DeployResponse = client
-                .post(format!("{base}/api/deploy"))
-                .header("Authorization", &auth)
-                .json(&body)
-                .send()
-                .expect("request failed")
-                .json()
-                .expect("invalid response");
+            match api_post::<DeployResponse>(&client, &format!("{base}/api/deploy"), &auth, &body) {
+                Ok(resp) => {
+                    println!("Deploying '{}' ...", resp.name);
+                    println!("URL:         {}", resp.url);
+                    println!("Status:      {}", resp.status);
+                    println!("Environment: {}", resp.environment.unwrap_or_else(|| "preview".into()));
+                }
+                Err(e) => eprintln!("Error: {e}"),
+            }
+        }
 
-            println!("Deploying '{}' ...", resp.name);
-            println!("URL: {}", resp.url);
-            println!("Status: {}", resp.status);
+        Commands::Plan { repo, branch, name, ttl } => {
+            let body = serde_json::json!({
+                "repo": repo, "branch": branch, "name": name, "ttl": ttl,
+            });
+            match api_post::<DeployPlan>(&client, &format!("{base}/api/plan"), &auth, &body) {
+                Ok(plan) => {
+                    println!("Plan created: {}", plan.id);
+                    println!("Name:         {}", plan.name);
+                    println!("URL:          {}", plan.url);
+                    println!("Environment:  {}", plan.environment);
+                    println!("Status:       {}", plan.status);
+                    println!();
+                    println!("Actions:");
+                    if let Ok(actions) = serde_json::from_str::<Vec<serde_json::Value>>(&plan.actions) {
+                        for (i, action) in actions.iter().enumerate() {
+                            println!("  {}. {}", i + 1, action.get("action").and_then(|a| a.as_str()).unwrap_or("?"));
+                        }
+                    }
+                    println!();
+                    println!("To apply: agentdns apply {}", plan.id);
+                }
+                Err(e) => eprintln!("Error: {e}"),
+            }
+        }
+
+        Commands::Apply { plan_id } => {
+            match api_post::<DeployResponse>(&client, &format!("{base}/api/plan/{plan_id}/apply"), &auth, &serde_json::json!({})) {
+                Ok(resp) => {
+                    println!("Plan applied! Deploying '{}' ...", resp.name);
+                    println!("URL:    {}", resp.url);
+                    println!("Status: {}", resp.status);
+                }
+                Err(e) => eprintln!("Error: {e}"),
+            }
+        }
+
+        Commands::Plans => {
+            match api_get::<Vec<DeployPlan>>(&client, &format!("{base}/api/plans"), &auth) {
+                Ok(plans) => {
+                    if plans.is_empty() {
+                        println!("No plans.");
+                        return;
+                    }
+                    println!("{:<38} {:<20} {:<10} {:<10} {:<30}", "ID", "NAME", "ENV", "STATUS", "CREATED");
+                    println!("{}", "-".repeat(108));
+                    for p in plans {
+                        println!("{:<38} {:<20} {:<10} {:<10} {:<30}", p.id, p.name, p.environment, p.status, p.created_at);
+                    }
+                }
+                Err(e) => eprintln!("Error: {e}"),
+            }
+        }
+
+        Commands::Promote { name, target } => {
+            let body = serde_json::json!({ "target": target });
+            match api_post::<DeployResponse>(&client, &format!("{base}/api/deploy/{name}/promote"), &auth, &body) {
+                Ok(resp) => {
+                    println!("Promoted '{}' to {}", resp.name, resp.environment.unwrap_or(target));
+                    println!("URL: {}", resp.url);
+                }
+                Err(e) => eprintln!("Error: {e}"),
+            }
         }
 
         Commands::Ls => {
-            let deployments: Vec<Deployment> = client
-                .get(format!("{base}/api/deployments"))
-                .header("Authorization", &auth)
-                .send()
-                .expect("request failed")
-                .json()
-                .expect("invalid response");
-
-            if deployments.is_empty() {
-                println!("No active deployments.");
-                return;
-            }
-
-            println!("{:<25} {:<12} {:<15} {:<40}", "NAME", "STATUS", "BRANCH", "URL");
-            println!("{}", "-".repeat(92));
-            for d in deployments {
-                println!("{:<25} {:<12} {:<15} {:<40}", d.name, d.status, d.branch, d.url);
+            match api_get::<Vec<Deployment>>(&client, &format!("{base}/api/deployments"), &auth) {
+                Ok(deployments) => {
+                    if deployments.is_empty() {
+                        println!("No active deployments.");
+                        return;
+                    }
+                    println!("{:<22} {:<10} {:<10} {:<10} {:<12} {:<35}", "NAME", "STATUS", "VERIFIED", "ENV", "BRANCH", "URL");
+                    println!("{}", "-".repeat(109));
+                    for d in deployments {
+                        println!("{:<22} {:<10} {:<10} {:<10} {:<12} {:<35}",
+                            d.name,
+                            d.status,
+                            d.verified.as_deref().unwrap_or("-"),
+                            d.environment.as_deref().unwrap_or("preview"),
+                            d.branch,
+                            d.url,
+                        );
+                    }
+                }
+                Err(e) => eprintln!("Error: {e}"),
             }
         }
 
         Commands::Status { name } => {
-            let d: Deployment = client
-                .get(format!("{base}/api/deployments/{name}"))
-                .header("Authorization", &auth)
-                .send()
-                .expect("request failed")
-                .json()
-                .expect("invalid response");
-
-            println!("Name:    {}", d.name);
-            println!("Repo:    {}", d.repo);
-            println!("Branch:  {}", d.branch);
-            println!("Status:  {}", d.status);
-            println!("URL:     {}", d.url);
-            println!("Created: {}", d.created_at);
+            match api_get::<Deployment>(&client, &format!("{base}/api/deployments/{name}"), &auth) {
+                Ok(d) => {
+                    println!("Name:        {}", d.name);
+                    println!("Repo:        {}", d.repo);
+                    println!("Branch:      {}", d.branch);
+                    println!("Status:      {}", d.status);
+                    println!("Verified:    {}", d.verified.as_deref().unwrap_or("-"));
+                    println!("Environment: {}", d.environment.as_deref().unwrap_or("preview"));
+                    println!("URL:         {}", d.url);
+                    println!("Created:     {}", d.created_at);
+                }
+                Err(e) => eprintln!("Error: {e}"),
+            }
         }
 
         Commands::Logs { name } => {
-            let logs: Vec<String> = client
-                .get(format!("{base}/api/deployments/{name}/logs"))
-                .header("Authorization", &auth)
-                .send()
-                .expect("request failed")
-                .json()
-                .expect("invalid response");
-
-            for line in logs {
-                println!("{line}");
+            match api_get::<Vec<String>>(&client, &format!("{base}/api/deployments/{name}/logs"), &auth) {
+                Ok(logs) => {
+                    for line in logs {
+                        println!("{line}");
+                    }
+                }
+                Err(e) => eprintln!("Error: {e}"),
             }
         }
 
         Commands::Down { name } => {
-            client
-                .delete(format!("{base}/api/deploy/{name}"))
+            match client.delete(format!("{base}/api/deploy/{name}"))
                 .header("Authorization", &auth)
-                .send()
-                .expect("request failed");
-
-            println!("Deployment '{name}' torn down.");
+                .send() {
+                Ok(_) => println!("Deployment '{name}' torn down."),
+                Err(e) => eprintln!("Error: {e}"),
+            }
         }
 
         Commands::Record { action } => match action {
             RecordAction::Add { name, record_type, value } => {
                 let body = serde_json::json!({
-                    "name": name,
-                    "record_type": record_type,
-                    "value": value,
+                    "name": name, "record_type": record_type, "value": value,
                 });
-                client
-                    .post(format!("{base}/api/records"))
-                    .header("Authorization", &auth)
-                    .json(&body)
-                    .send()
-                    .expect("request failed");
-
-                println!("Record added: {name} {record_type} {value}");
+                match api_post::<DnsRecord>(&client, &format!("{base}/api/records"), &auth, &body) {
+                    Ok(_) => println!("Record added: {name} {record_type} {value}"),
+                    Err(e) => eprintln!("Error: {e}"),
+                }
             }
             RecordAction::Ls => {
-                let records: Vec<DnsRecord> = client
-                    .get(format!("{base}/api/records"))
-                    .header("Authorization", &auth)
-                    .send()
-                    .expect("request failed")
-                    .json()
-                    .expect("invalid response");
-
-                if records.is_empty() {
-                    println!("No custom DNS records.");
-                    return;
-                }
-
-                println!("{:<25} {:<8} {:<30}", "NAME", "TYPE", "VALUE");
-                println!("{}", "-".repeat(63));
-                for r in records {
-                    println!("{:<25} {:<8} {:<30}", r.name, r.record_type, r.value);
+                match api_get::<Vec<DnsRecord>>(&client, &format!("{base}/api/records"), &auth) {
+                    Ok(records) => {
+                        if records.is_empty() {
+                            println!("No custom DNS records.");
+                            return;
+                        }
+                        println!("{:<25} {:<8} {:<30}", "NAME", "TYPE", "VALUE");
+                        println!("{}", "-".repeat(63));
+                        for r in records {
+                            println!("{:<25} {:<8} {:<30}", r.name, r.record_type, r.value);
+                        }
+                    }
+                    Err(e) => eprintln!("Error: {e}"),
                 }
             }
             RecordAction::Rm { name } => {
-                client
-                    .delete(format!("{base}/api/records/{name}"))
+                match client.delete(format!("{base}/api/records/{name}"))
                     .header("Authorization", &auth)
-                    .send()
-                    .expect("request failed");
-
-                println!("Record '{name}' deleted.");
+                    .send() {
+                    Ok(_) => println!("Record '{name}' deleted."),
+                    Err(e) => eprintln!("Error: {e}"),
+                }
             }
         },
 
-        Commands::Health => {
-            let h: HealthResponse = client
-                .get(format!("{base}/api/health"))
-                .send()
-                .expect("request failed")
-                .json()
-                .expect("invalid response");
+        Commands::Audit { limit } => {
+            match api_get::<Vec<AuditEvent>>(&client, &format!("{base}/api/audit?limit={limit}"), &auth) {
+                Ok(events) => {
+                    if events.is_empty() {
+                        println!("No audit events.");
+                        return;
+                    }
+                    println!("{:<20} {:<18} {:<14} {:<20} {:<30}", "TIMESTAMP", "ACTION", "TYPE", "RESOURCE", "ACTOR");
+                    println!("{}", "-".repeat(102));
+                    for e in events {
+                        let ts = e.created_at.get(..19).unwrap_or(&e.created_at);
+                        println!("{:<20} {:<18} {:<14} {:<20} {:<30}", ts, e.action, e.resource_type, e.resource_name, e.actor);
+                    }
+                }
+                Err(e) => eprintln!("Error: {e}"),
+            }
+        }
 
-            println!("Status:      {}", h.status);
-            println!("Domain:      {}", h.domain);
-            println!("Deployments: {}", h.active_deployments);
+        Commands::Health => {
+            match api_get::<HealthResponse>(&client, &format!("{base}/api/health"), "") {
+                Ok(h) => {
+                    println!("Status:      {}", h.status);
+                    println!("Domain:      {}", h.domain);
+                    println!("Deployments: {}", h.active_deployments);
+                }
+                Err(e) => eprintln!("Error: {e}"),
+            }
         }
     }
+}
+
+fn api_get<T: serde::de::DeserializeOwned>(client: &reqwest::blocking::Client, url: &str, auth: &str) -> Result<T, String> {
+    let mut req = client.get(url);
+    if !auth.is_empty() {
+        req = req.header("Authorization", auth);
+    }
+    let resp = req.send().map_err(|e| format!("request failed: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("{status}: {body}"));
+    }
+    resp.json().map_err(|e| format!("invalid response: {e}"))
+}
+
+fn api_post<T: serde::de::DeserializeOwned>(client: &reqwest::blocking::Client, url: &str, auth: &str, body: &serde_json::Value) -> Result<T, String> {
+    let resp = client.post(url)
+        .header("Authorization", auth)
+        .json(body)
+        .send()
+        .map_err(|e| format!("request failed: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("{status}: {body}"));
+    }
+    resp.json().map_err(|e| format!("invalid response: {e}"))
 }
