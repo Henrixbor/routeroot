@@ -45,7 +45,7 @@ AgentDNS is a self-hosted alternative to Vercel/Netlify preview deployments, bui
 
 ```bash
 # On your server (Ubuntu/Debian):
-git clone https://github.com/Vibeyard/AgentDNS.git
+git clone https://github.com/Henrixbor/routeroot.git
 cd AgentDNS
 sudo bash scripts/setup.sh
 ```

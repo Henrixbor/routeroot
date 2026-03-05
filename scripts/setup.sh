@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # AgentDNS — One-command setup
-# Usage: curl -sSL https://raw.githubusercontent.com/Vibeyard/AgentDNS/main/scripts/setup.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/Henrixbor/routeroot/main/scripts/setup.sh | bash
 # Or:    git clone ... && cd AgentDNS && bash scripts/setup.sh
 
-REPO_URL="https://github.com/Vibeyard/AgentDNS.git"
+REPO_URL="https://github.com/Henrixbor/routeroot.git"
 INSTALL_DIR="/opt/agentdns"
 
 echo ""
