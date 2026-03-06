@@ -130,12 +130,13 @@ Add to your Claude Code MCP config (`~/.claude/mcp.json`):
 }
 ```
 
-MCP Tools available (15):
+MCP Tools available (16):
 - `deploy_preview` — deploy a branch (subdomain or path-based)
 - `list_deployments`, `get_deployment`, `teardown`, `get_logs`
 - `create_dns_record`, `list_dns_records`, `delete_dns_record`
 - `health`, `promote`, `plan_deploy`, `apply_plan`
 - `map_custom_domain`, `list_custom_domains`, `delete_custom_domain`
+- `setup_github_webhook` — auto-configure GitHub webhook (or return manual instructions)
 
 ## Docker Compose Key Details
 - `agent-api`: mounts `/var/run/docker.sock` (host Docker), `/dns-zones`, `/data`; port 8053 localhost-only

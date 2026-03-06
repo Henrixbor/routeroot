@@ -274,6 +274,20 @@ fn tool_definitions() -> Value {
                     },
                     "required": ["domain"]
                 }
+            },
+            {
+                "name": "setup_github_webhook",
+                "description": "Configure a GitHub repository webhook for auto-deploy on push. Requires a GitHub token with 'admin:repo_hook' permission. On push, branches auto-deploy; on branch delete, deployments auto-teardown. If the GitHub token is not available, returns manual setup instructions instead.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": { "type": "string", "description": "GitHub repo in owner/repo format (e.g. Vibeyard/my-app)" },
+                        "github_token": { "type": "string", "description": "GitHub personal access token with admin:repo_hook permission. If omitted, returns manual instructions." },
+                        "webhook_secret": { "type": "string", "description": "Webhook secret (must match ROUTEROOT_GITHUB_WEBHOOK_SECRET on server). If omitted, generates one." },
+                        "events": { "type": "array", "items": { "type": "string" }, "description": "GitHub events to subscribe to (default: ['push'])" }
+                    },
+                    "required": ["repo"]
+                }
             }
         ]
     })
@@ -398,6 +412,100 @@ async fn call_tool(
             api_request(client, cfg, "DELETE", &format!("/api/domains/{}", domain), None).await
         }
 
+        "setup_github_webhook" => {
+            let repo = args.get("repo").and_then(|v| v.as_str()).ok_or("missing required param: repo")?;
+            let github_token = args.get("github_token").and_then(|v| v.as_str());
+
+            // Determine webhook URL from API URL
+            let webhook_url = format!("{}/api/webhook/github", cfg.api_url);
+            let webhook_secret = args.get("webhook_secret")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("{:x}", rand_u64()));
+
+            let events: Vec<String> = args.get("events")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_else(|| vec!["push".into()]);
+
+            match github_token {
+                Some(token) => {
+                    // Auto-configure via GitHub API
+                    let gh_url = format!("https://api.github.com/repos/{}/hooks", repo);
+                    let body = json!({
+                        "name": "web",
+                        "active": true,
+                        "events": events,
+                        "config": {
+                            "url": webhook_url,
+                            "content_type": "json",
+                            "secret": webhook_secret,
+                            "insecure_ssl": "0"
+                        }
+                    });
+
+                    let resp = client.post(&gh_url)
+                        .header("Authorization", format!("Bearer {}", token))
+                        .header("Accept", "application/vnd.github+json")
+                        .header("User-Agent", "routeroot-mcp")
+                        .json(&body)
+                        .send()
+                        .await
+                        .map_err(|e| format!("GitHub API request failed: {}", e))?;
+
+                    let status = resp.status();
+                    let text = resp.text().await.map_err(|e| format!("failed to read response: {}", e))?;
+
+                    if status.is_success() {
+                        let gh_resp: Value = serde_json::from_str(&text).unwrap_or(json!({}));
+                        Ok(json!({
+                            "status": "configured",
+                            "repo": repo,
+                            "webhook_url": webhook_url,
+                            "webhook_secret": webhook_secret,
+                            "hook_id": gh_resp.get("id"),
+                            "events": events,
+                            "note": "Webhook created. Set ROUTEROOT_GITHUB_WEBHOOK_SECRET on your server to match the webhook_secret above (if not already set). Pushes will now auto-deploy branches."
+                        }))
+                    } else {
+                        Ok(json!({
+                            "status": "failed",
+                            "error": format!("GitHub API returned {}: {}", status, text),
+                            "manual_instructions": format!(
+                                "Could not auto-configure. Set up manually:\n\
+                                1. Go to https://github.com/{}/settings/hooks/new\n\
+                                2. Payload URL: {}\n\
+                                3. Content type: application/json\n\
+                                4. Secret: {}\n\
+                                5. Events: {}\n\
+                                6. Set ROUTEROOT_GITHUB_WEBHOOK_SECRET={} on the server",
+                                repo, webhook_url, webhook_secret, events.join(", "), webhook_secret
+                            )
+                        }))
+                    }
+                }
+                None => {
+                    // No token — return manual instructions
+                    Ok(json!({
+                        "status": "manual_setup_required",
+                        "instructions": format!(
+                            "No GitHub token provided. Set up the webhook manually:\n\
+                            1. Go to https://github.com/{}/settings/hooks/new\n\
+                            2. Payload URL: {}\n\
+                            3. Content type: application/json\n\
+                            4. Secret: (use your ROUTEROOT_GITHUB_WEBHOOK_SECRET value)\n\
+                            5. Select events: Push\n\
+                            6. Click 'Add webhook'\n\n\
+                            Or call this tool again with a github_token that has admin:repo_hook permission.",
+                            repo, webhook_url
+                        ),
+                        "webhook_url": webhook_url,
+                        "events": events
+                    }))
+                }
+            }
+        }
+
         _ => Err(format!("unknown tool: {}", name)),
     }
 }
@@ -506,6 +614,13 @@ async fn handle_request(
             }
         }
     }
+}
+
+/// Simple random u64 from system entropy (no rand crate needed)
+fn rand_u64() -> u64 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    RandomState::new().build_hasher().finish()
 }
 
 // ---------------------------------------------------------------------------

@@ -63,16 +63,57 @@ async fn main() -> anyhow::Result<()> {
         services::cleanup::run_cleanup_loop(cleanup_state).await;
     });
 
-    // Replace Caddy's Caddyfile config with clean JSON config at startup
+    // Replace Caddy's Caddyfile config with clean JSON config at startup,
+    // then re-register routes for all active deployments from the DB
     tokio::spawn({
-        let proxy = services::proxy::ProxyService::new(&state.config.caddy_admin_url);
-        let domains = state.config.domains.clone();
+        let state_clone = state.clone();
         async move {
             // Wait for Caddy to be ready
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             let tls_check_url = "http://agent-api:8053/api/tls-check";
-            if let Err(e) = proxy.init_caddy_config(&domains, tls_check_url).await {
+            if let Err(e) = state_clone.proxy.init_caddy_config(&state_clone.config.domains, tls_check_url).await {
                 tracing::warn!("Failed to initialize Caddy config: {e}");
+                return;
+            }
+
+            // Re-register proxy routes for all running deployments
+            let deployments = match state_clone.db.list_deployments() {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!("Failed to list deployments for route restore: {e}");
+                    return;
+                }
+            };
+
+            let mut restored = 0u32;
+            for dep in &deployments {
+                if dep.status != "running" {
+                    continue;
+                }
+                let Some(port) = dep.port else { continue };
+
+                // Re-add subdomain route
+                if let Err(e) = state_clone.proxy.add_route(&dep.name, &state_clone.config.domain, port).await {
+                    tracing::warn!(name = %dep.name, "failed to restore subdomain route: {e}");
+                    continue;
+                }
+
+                // Re-add path route if the URL indicates path-based routing
+                let domain_prefix = format!("https://{}/", state_clone.config.domain);
+                if dep.url.starts_with(&domain_prefix) {
+                    let path_prefix = dep.url.strip_prefix(&domain_prefix).unwrap_or("");
+                    if !path_prefix.is_empty() {
+                        if let Err(e) = state_clone.proxy.add_path_route(path_prefix, &state_clone.config.domain, port).await {
+                            tracing::warn!(name = %dep.name, path = %path_prefix, "failed to restore path route: {e}");
+                        }
+                    }
+                }
+
+                restored += 1;
+            }
+
+            if restored > 0 {
+                tracing::info!(count = restored, "restored proxy routes for active deployments");
             }
         }
     });

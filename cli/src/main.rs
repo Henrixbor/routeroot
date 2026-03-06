@@ -521,7 +521,7 @@ fn main() {
                 }
             }
             println!();
-            println!("   Restart Claude Code — 15 tools become available:");
+            println!("   Restart Claude Code — 16 tools become available:");
             println!("   deploy_preview, list_deployments, get_deployment, teardown,");
             println!("   get_logs, create_dns_record, list_dns_records, delete_dns_record,");
             println!("   health, promote, plan_deploy, apply_plan,");

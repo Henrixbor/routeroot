@@ -27,7 +27,7 @@ RouteRoot is a self-hosted alternative to Vercel/Netlify preview deployments, bu
 - **Promote** — Move preview → staging → production
 - **Custom Domains** — Map `client.com` to any deployment
 - **Path Routing** — Deploy at `yourdomain.dev/client/staging` instead of subdomains
-- **MCP Server** — 15 tools for Claude Code / any MCP client
+- **MCP Server** — 16 tools for Claude Code / any MCP client
 - **CLI** — `routeroot deploy`, `ls`, `logs`, `down`, `promote`, `audit`, `setup`
 - **GitHub Webhooks** — Auto-deploy on push, auto-teardown on branch delete
 - **DNS Management** — Create/delete DNS records via API (NS/SOA/CAA protected)
@@ -131,7 +131,7 @@ Or configure manually — add to `~/.claude/mcp.json`:
 }
 ```
 
-Restart Claude Code — 15 tools become available. Now Claude Code can deploy branches, check status, read logs, and tear down previews autonomously.
+Restart Claude Code — 16 tools become available. Now Claude Code can deploy branches, check status, read logs, and tear down previews autonomously.
 
 ## API Reference
 
@@ -249,15 +249,48 @@ curl -X POST https://api.yourdomain.dev/api/deploy \
 curl https://api.yourdomain.dev/api/audit -H "Authorization: Bearer $KEY"
 ```
 
-### GitHub Webhook
+### GitHub Webhook (Auto-deploy on push)
 
-Set up in your repo: Settings → Webhooks → Add webhook:
-- URL: `https://api.yourdomain.dev/api/webhook/github`
-- Content type: `application/json`
-- Secret: your `ROUTEROOT_GITHUB_WEBHOOK_SECRET`
-- Events: Push events
+When a webhook is configured, pushes auto-deploy branches and branch deletes auto-teardown deployments.
 
-Branches auto-deploy on push, auto-teardown on delete.
+**Option A: Automatic setup via MCP (recommended)**
+
+If Claude Code has RouteRoot MCP configured, it can set up the webhook automatically:
+```
+# Claude Code will call: setup_github_webhook(repo="owner/repo", github_token="ghp_...")
+# This creates the webhook via GitHub API — no manual steps needed.
+```
+
+The MCP tool needs a GitHub personal access token with `admin:repo_hook` permission. If the token isn't available, it returns manual instructions instead.
+
+**Option B: Automatic setup via CLI**
+
+```bash
+# If you have the GitHub CLI (gh) installed:
+WEBHOOK_SECRET=$(openssl rand -hex 20)
+gh api repos/OWNER/REPO/hooks --method POST \
+  -f name=web -f active=true \
+  -f 'events[]=push' \
+  -f config[url]=https://api.yourdomain.dev/api/webhook/github \
+  -f config[content_type]=json \
+  -f config[secret]=$WEBHOOK_SECRET
+echo "Set ROUTEROOT_GITHUB_WEBHOOK_SECRET=$WEBHOOK_SECRET on your server"
+```
+
+**Option C: Manual setup**
+
+1. Go to `github.com/OWNER/REPO` → Settings → Webhooks → Add webhook
+2. Payload URL: `https://api.yourdomain.dev/api/webhook/github`
+3. Content type: `application/json`
+4. Secret: your `ROUTEROOT_GITHUB_WEBHOOK_SECRET` value
+5. Events: Push events
+6. Click "Add webhook"
+
+**Important:** The `ROUTEROOT_GITHUB_WEBHOOK_SECRET` on the server must match the secret in the webhook config. Add it to your `.env` and restart:
+```bash
+echo "ROUTEROOT_GITHUB_WEBHOOK_SECRET=your-secret" >> .env
+docker compose up -d
+```
 
 ## MCP Tools
 
@@ -278,6 +311,7 @@ Branches auto-deploy on push, auto-teardown on delete.
 | `map_custom_domain` | Map a custom domain (e.g. client.com) to a deployment |
 | `list_custom_domains` | List all custom domain mappings |
 | `delete_custom_domain` | Remove a custom domain mapping |
+| `setup_github_webhook` | Auto-configure GitHub webhook for a repo (or return manual instructions) |
 
 ## CLI Reference
 
