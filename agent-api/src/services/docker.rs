@@ -97,6 +97,22 @@ impl DockerService {
         Ok(lines)
     }
 
+    /// Stop and remove a container by its name (e.g. "routeroot-{name}").
+    /// Useful for cleaning up orphan containers when we don't have a container_id.
+    pub async fn stop_container_by_name(&self, container_name: &str) -> Result<(), AppError> {
+        self.client
+            .stop_container(container_name, Some(StopContainerOptions { t: 10 }))
+            .await
+            .ok();
+
+        self.client
+            .remove_container(container_name, Some(RemoveContainerOptions { force: true, ..Default::default() }))
+            .await
+            .ok();
+
+        Ok(())
+    }
+
     pub fn client(&self) -> &Docker {
         &self.client
     }

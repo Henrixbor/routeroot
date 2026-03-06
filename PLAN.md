@@ -51,55 +51,89 @@ vendor dashboards (Cloudflare, Railway, Vercel), and per-project setup. We want:
 
 ### 2. Agent API (Rust + Axum)
 The brain of the system. Single binary that orchestrates everything.
+Runs inside Docker but manages sibling containers on the host via mounted Docker socket.
 
 **Endpoints:**
 ```
 POST   /api/deploy              Deploy a branch (clone → build → run → route)
 DELETE /api/deploy/:name        Tear down a deployment
+POST   /api/deploy/:name/promote  Promote to staging/production
 GET    /api/deployments         List active deployments
 GET    /api/deployments/:name   Deployment details + status
-GET    /api/deployments/:name/logs  Stream container logs
+GET    /api/deployments/:name/logs  Container logs
 
-POST   /api/records             Create custom DNS record
+POST   /api/plan                Create deploy plan (dry-run)
+POST   /api/plan/:id/apply      Execute a plan
+GET    /api/plans               List plans
+
+POST   /api/records             Create custom DNS record (NS/SOA/CAA blocked)
 GET    /api/records             List DNS records
 DELETE /api/records/:name       Delete DNS record
 
-GET    /api/health              System health (CoreDNS, Caddy, Docker, disk)
+POST   /api/domains             Map custom domain to deployment
+GET    /api/domains             List custom domain mappings
+DELETE /api/domains/:domain     Remove custom domain mapping
+
+GET    /api/health              System health
+GET    /api/tls-check           Caddy TLS validation endpoint
+GET    /api/audit               Audit log
+
+POST   /api/webhook/github      GitHub push webhook
 ```
 
 **Deploy flow:**
-1. Receive deploy request (repo URL, branch, optional subdomain name)
-2. Clone repo, detect build system (Dockerfile / package.json / Cargo.toml)
-3. Build Docker image
-4. Allocate port, start container with resource limits
-5. Register route in Caddy via admin API
-6. Return `https://{name}.routeroot.dev`
-7. Background: health check loop, auto-expire after TTL
+1. Receive deploy request (repo URL, branch, optional subdomain name or path_prefix)
+2. Clone repo, detect build system (Dockerfile / package.json / Cargo.toml / go.mod / Python / static)
+3. Build Docker image (via `docker build` CLI in container)
+4. Allocate port, start container with resource limits (bind `0.0.0.0`)
+5. Register route in Caddy via JSON admin API (using `host.docker.internal:{port}`)
+6. Return `https://{name}.domain` or `https://domain/{path_prefix}`
+7. Background: verification (DNS + HTTP), auto-expire after TTL
 
 **Tech:**
 - Rust + Axum for the HTTP server
-- Bollard for Docker API (no shelling out)
+- Bollard for Docker container lifecycle (create, stop, logs, list)
+- `docker-ce-cli` for image builds (shells out to `docker build`)
 - SQLite (via rusqlite) for state
 - Tokio for async
 
 ### 3. Caddy (off-the-shelf)
 - On-demand TLS: auto-provisions Let's Encrypt certs per subdomain
-- Admin API at `:2019` for dynamic route registration
-- Validation endpoint: API confirms subdomain is a real deployment before cert issuance
+- JSON admin API at `:2019` for dynamic route registration
+- **Configured via JSON API at startup** — agent-api replaces Caddyfile config with `init_caddy_config`
+- Validation endpoint (`/api/tls-check`): API confirms subdomain is a real deployment before cert issuance
+- Requires `extra_hosts: ["host.docker.internal:host-gateway"]` in docker-compose to reach deployed containers
+- Routes use `host.docker.internal:{port}` to reach deployment containers on the host network
 
 ### 4. CLI (`routeroot`)
 Thin Rust CLI that wraps the API.
 
 ```bash
-routeroot deploy <repo> [--branch <branch>] [--name <name>] [--ttl 48h]
+routeroot deploy <repo> [-b branch] [-n name] [-t ttl] [-e environment] [--path-prefix prefix]
+routeroot plan <repo> [-b branch] [-n name] [-t ttl]
+routeroot apply <plan_id>
+routeroot plans
+routeroot promote <name> <target>
 routeroot ls
-routeroot logs <name> [--follow]
+routeroot status <name>
+routeroot logs <name>
 routeroot down <name>
-routeroot status
-routeroot record add <subdomain> <type> <value>
+routeroot record add <name> [-t type] <value>
 routeroot record ls
-routeroot record rm <subdomain>
+routeroot record rm <name>
+routeroot domain map <domain> <deployment>
+routeroot domain ls
+routeroot domain rm <domain>
+routeroot audit [-l limit]
+routeroot health
+routeroot setup
 ```
+
+### 5. MCP Server (`routeroot-mcp`)
+Stdio-based MCP server with 15 tools for AI agent integration.
+Tools: deploy_preview, list_deployments, get_deployment, teardown, get_logs,
+create_dns_record, list_dns_records, delete_dns_record, health, promote,
+plan_deploy, apply_plan, map_custom_domain, list_custom_domains, delete_custom_domain.
 
 ### 5. GitHub Webhook Handler (in Agent API)
 - Listens for push events
@@ -113,42 +147,49 @@ routeroot record rm <subdomain>
 RouteRoot/
 ├── PLAN.md
 ├── CLAUDE.md
+├── .env.example                # All env vars documented
 ├── docker-compose.yml          # Full stack: CoreDNS + Caddy + Agent API
 ├── agent-api/                  # Rust Axum service
 │   ├── Cargo.toml
+│   ├── Dockerfile              # Installs docker-ce-cli from official Docker repo
 │   ├── src/
-│   │   ├── main.rs
+│   │   ├── main.rs             # Startup, Caddy JSON config init
 │   │   ├── config.rs           # Env-based config
 │   │   ├── routes/
 │   │   │   ├── mod.rs
-│   │   │   ├── deploy.rs       # Deploy/teardown endpoints
+│   │   │   ├── deploy.rs       # Deploy/teardown/promote/plan/apply
 │   │   │   ├── records.rs      # DNS record CRUD
-│   │   │   ├── health.rs       # System health
+│   │   │   ├── domains.rs      # Custom domain mapping
+│   │   │   ├── health.rs       # System health + TLS check
 │   │   │   └── webhook.rs      # GitHub webhook handler
 │   │   ├── services/
 │   │   │   ├── mod.rs
 │   │   │   ├── docker.rs       # Container lifecycle (bollard)
 │   │   │   ├── dns.rs          # Zone file writer + CoreDNS reload
-│   │   │   ├── proxy.rs        # Caddy admin API client
-│   │   │   ├── builder.rs      # Repo clone + image build
+│   │   │   ├── proxy.rs        # Caddy JSON API client + init_caddy_config
+│   │   │   ├── builder.rs      # Repo clone + docker build (shells out to CLI)
+│   │   │   ├── verify.rs       # DNS + HTTP deployment verification
 │   │   │   └── cleanup.rs      # TTL-based reaper task
 │   │   ├── db.rs               # SQLite schema + queries
 │   │   ├── error.rs            # Error types
 │   │   └── auth.rs             # API key middleware
-│   └── Dockerfile
 ├── cli/                        # Rust CLI
+│   ├── Cargo.toml
+│   └── src/
+│       └── main.rs
+├── mcp-server/                 # MCP server for AI agents (stdio transport)
 │   ├── Cargo.toml
 │   └── src/
 │       └── main.rs
 ├── coredns/
 │   ├── Corefile
 │   └── zones/
-│       └── db.routeroot.dev     # Zone template
+│       └── db.routeroot.dev    # Zone template (setup.sh generates for your domain)
 ├── caddy/
-│   └── Caddyfile
+│   └── Caddyfile               # Bootstrap only; replaced by JSON API at startup
 └── scripts/
-    ├── setup.sh                # First-time server setup
-    └── install-cli.sh          # Install CLI locally
+    ├── setup.sh                # First-time server setup (one-command, idempotent)
+    └── doctor.sh               # Diagnose and auto-fix (ports, DNS, Docker, Caddy)
 ```
 
 ## Configuration
@@ -158,7 +199,7 @@ All via environment variables:
 ```env
 # Required
 ROUTEROOT_DOMAIN=routeroot.dev         # Your domain
-ROUTEROOT_SERVER_IP=51.178.209.71     # Server public IP
+ROUTEROOT_SERVER_IP=51.178.209.71     # Server public IP (must match DNS zone A records)
 ROUTEROOT_API_KEY=<random-secret>     # API auth
 
 # Optional
@@ -167,7 +208,12 @@ ROUTEROOT_DEFAULT_TTL=48h             # Auto-expire deployments
 ROUTEROOT_MAX_MEMORY=2048             # MB per container
 ROUTEROOT_MAX_CPUS=2                  # CPUs per container
 ROUTEROOT_GITHUB_WEBHOOK_SECRET=...   # For auto-deploy on push
-ROUTEROOT_CADDY_ADMIN=http://caddy:2019
+ROUTEROOT_LOG_FORMAT=human            # Set to 'json' for structured logging
+
+# Internal (set by docker-compose.yml)
+ROUTEROOT_CADDY_ADMIN=http://caddy:2019  # Caddy JSON admin API
+DATABASE_PATH=/data/routeroot.db          # SQLite DB path inside container
+ZONE_FILE_PATH=/dns-zones/db.domain       # CoreDNS zone file path inside container
 ```
 
 ## Build Detection
@@ -184,22 +230,41 @@ The builder auto-detects how to build a repo:
 
 ## Phases
 
-### Phase 1: Foundation (MVP)
-- [ ] Agent API skeleton (Axum + SQLite + auth)
-- [ ] Docker service (bollard): run/stop/logs/list
-- [ ] Caddy integration: dynamic route registration via admin API
-- [ ] CoreDNS config with wildcard zone
-- [ ] docker-compose.yml for full stack
-- [ ] Deploy endpoint: git clone → docker build → run → route → return URL
-- [ ] Teardown endpoint
-- [ ] List/status endpoints
-- [ ] TTL-based cleanup task
+### Phase 1: Foundation (MVP) -- COMPLETE
+- [x] Agent API skeleton (Axum + SQLite + auth)
+- [x] Docker service (bollard): run/stop/logs/list
+- [x] Caddy integration: dynamic route registration via JSON API (replaces Caddyfile at startup)
+- [x] CoreDNS config with wildcard zone
+- [x] docker-compose.yml for full stack
+- [x] Deploy endpoint: git clone → docker build → run → route → return URL
+- [x] Teardown endpoint
+- [x] List/status endpoints
+- [x] TTL-based cleanup task
+- [x] Plan/Apply pattern for safe agent-driven deployments
+- [x] DNS record management (CRUD, with NS/SOA/CAA protection)
+- [x] Custom domain mapping
+- [x] Path-based routing (path-prefix routes inserted before root domain catch-all)
+- [x] Deployment promotion (preview → staging → production)
+- [x] Audit log on all mutations
+- [x] Deployment verification (DNS + HTTP health checks)
+- [x] On-demand TLS via Caddy JSON API config
 
-### Phase 2: CLI + Webhooks
-- [ ] CLI tool wrapping the API
-- [ ] GitHub webhook handler (push → deploy, delete → teardown)
-- [ ] Build detection (Dockerfile, Node, Rust, Go, static)
-- [ ] Container log streaming
+### Phase 2: CLI + MCP + Webhooks -- COMPLETE
+- [x] CLI tool wrapping the API (deploy, ls, status, logs, down, plan, apply, promote, record, domain, audit, health, setup)
+- [x] MCP server (15 tools, stdio transport)
+- [x] GitHub webhook handler (push → deploy, delete → teardown)
+- [x] Build detection (Dockerfile, Node, Rust, Go, Python, static)
+- [x] Container log streaming
+- [x] Setup script (one-command server setup, idempotent)
+- [x] Doctor script (diagnose and auto-fix)
+- [x] Systemd service + watchdog cron
+
+**Architecture decisions made during implementation:**
+- Agent-API runs in Docker, connects to host Docker via mounted socket
+- `docker-ce-cli` installed in agent-api container for `docker build` commands
+- Caddy configured via JSON API at startup (`init_caddy_config`), not just Caddyfile
+- Deployed containers bind `0.0.0.0` so Caddy reaches them via `host.docker.internal`
+- `extra_hosts: ["host.docker.internal:host-gateway"]` required on Caddy container
 
 ### Phase 3: Multi-Server / Geo-Distribution
 - [ ] Node registry: API to add/remove servers (Hetzner, OVH, etc.)
@@ -216,8 +281,8 @@ The builder auto-detects how to build a repo:
 - [ ] Health dashboard (simple HTML page at root domain)
 - [ ] Resource usage tracking per deployment
 - [ ] Deploy notifications (optional webhook/slack)
-- [ ] Custom domain mapping (point any domain at a deployment)
-- [ ] Deployment promotion: `routeroot promote staging → production`
+- [x] Custom domain mapping (point any domain at a deployment) — implemented
+- [x] Deployment promotion: `routeroot promote staging → production` — implemented
 
 ## Multi-Server Architecture
 

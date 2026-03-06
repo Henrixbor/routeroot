@@ -236,6 +236,9 @@ fi
 # --- Step 3: Dependencies ---
 echo "[3/7] Dependencies..."
 apt-get install -y -qq git curl openssl >/dev/null 2>&1 || true
+# Note: docker-ce-cli is installed INSIDE the agent-api container (via its Dockerfile)
+# so the agent-api can run 'docker build' against the host Docker daemon.
+# The host just needs the Docker daemon running.
 
 # --- Step 4: Repo ---
 echo "[4/7] Setting up $INSTALL_DIR..."

@@ -327,7 +327,7 @@ async fn call_tool(
             let record_type = args.get("record_type").and_then(|v| v.as_str()).unwrap_or("A");
             let body = json!({
                 "name": name,
-                "type": record_type,
+                "record_type": record_type,
                 "value": value
             });
             api_request(client, cfg, "POST", "/api/records", Some(body)).await

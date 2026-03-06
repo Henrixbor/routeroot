@@ -4,22 +4,42 @@ Self-hosted DNS + deploy platform for instant preview deployments and demos.
 Designed for AI agents to configure DNS and spin up live branch demos autonomously.
 
 ## Stack
-- **Agent API:** Rust + Axum + Bollard (Docker) + SQLite
+- **Agent API:** Rust + Axum + Bollard (Docker) + SQLite, runs inside Docker
 - **MCP Server:** Rust stdio MCP server for AI agent integration
 - **DNS:** CoreDNS with file-based zones
-- **Proxy:** Caddy with on-demand TLS and admin API
+- **Proxy:** Caddy with on-demand TLS, configured via JSON API at startup
 - **CLI:** Rust CLI wrapping the Agent API
 - **Orchestration:** docker-compose
 
+## Architecture: How Docker-in-Docker Works
+
+Agent-API runs in a Docker container but manages sibling containers on the host:
+1. The host Docker socket (`/var/run/docker.sock`) is mounted into the agent-api container
+2. Bollard crate connects to this socket for container lifecycle (create, stop, logs, list)
+3. `docker-ce-cli` (from official Docker repo) is installed in the agent-api image for `docker build` commands (builder.rs shells out to `docker build`)
+4. Deployed containers bind to `0.0.0.0` (not `127.0.0.1`) so Caddy can reach them
+5. Caddy uses `host.docker.internal:host-gateway` (set via `extra_hosts` in docker-compose) to reach deployed containers on the host network
+
+## Caddy Configuration
+
+Caddy starts with a Caddyfile for initial bootstrap, but agent-api **replaces the entire config via Caddy's JSON API** at startup (`init_caddy_config` in `proxy.rs`). This is critical because:
+- The JSON config sets up on-demand TLS with the validation endpoint (`/api/tls-check`)
+- Wildcard cert policies for `*.domain` are configured
+- The root domain and api.domain routes point to agent-api
+- Path-prefix routes are inserted **before** the root domain catch-all (ordering matters)
+- Subdomain routes use `host.docker.internal:{port}` to reach deployed containers
+
 ## Key Decisions
 - Wildcard DNS (`*.domain → server IP`) handles most routing; CoreDNS is lightweight
-- Caddy admin API (`:2019`) for dynamic route registration — no config file edits
-- Bollard crate for Docker API — no shelling out to `docker` CLI
+- Caddy JSON API (`:2019`) for dynamic route registration — replaces Caddyfile config at startup
+- Bollard crate for Docker container lifecycle; `docker` CLI for image builds
+- Deployment containers bind to `0.0.0.0` so Caddy can reach them via `host.docker.internal`
 - SQLite for deployment state — no external DB dependency
 - Single Rust binary for the API — minimal deployment footprint
 - Plan/Apply pattern for safe agent-driven deployments
 - Protected DNS records (NS, SOA, CAA cannot be modified via API)
 - Audit log on all mutations for traceability
+- DNS zone file must have A records pointing to the actual server IP (not 127.0.0.1)
 
 ## API Endpoints
 ```
@@ -98,11 +118,21 @@ MCP Tools available (15):
 - `health`, `promote`, `plan_deploy`, `apply_plan`
 - `map_custom_domain`, `list_custom_domains`, `delete_custom_domain`
 
+## Docker Compose Key Details
+- `agent-api`: mounts `/var/run/docker.sock` (host Docker), `/dns-zones`, `/data`
+- `caddy`: requires `extra_hosts: ["host.docker.internal:host-gateway"]` so it can reach deployment containers
+- `coredns`: file-based zones, 5s auto-reload
+- Environment variables flow from `.env` → `docker-compose.yml` → containers
+
 ## Project Layout
 - `agent-api/` — Rust Axum HTTP service (the brain)
+  - `src/services/proxy.rs` — Caddy JSON API client, including `init_caddy_config`
+  - `src/services/builder.rs` — `git clone` + `docker build` (shells out to docker CLI)
+  - `src/services/docker.rs` — Bollard-based container lifecycle
+  - `Dockerfile` — installs `docker-ce-cli` from official Docker repo
 - `cli/` — Rust CLI tool (`routeroot`)
 - `mcp-server/` — MCP server for AI agent integration (stdio transport)
 - `coredns/` — CoreDNS config and zone files
-- `caddy/` — Caddyfile
-- `scripts/` — Setup and install scripts
+- `caddy/` — Caddyfile (bootstrap only; replaced by JSON API at startup)
+- `scripts/` — Setup, doctor, and install scripts
 - `PLAN.md` — Full architecture and implementation plan

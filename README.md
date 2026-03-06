@@ -65,6 +65,7 @@ That's it. The script will:
 After install, configure DNS at your registrar:
 1. Set custom nameservers: `ns1.yourdomain` and `ns2.yourdomain`
 2. Create glue records pointing both to your server IP
+3. Verify the zone file (`coredns/zones/db.yourdomain`) has A records pointing to your actual server IP (not `127.0.0.1`)
 
 The setup script prints registrar-specific instructions for Namecheap, Porkbun, etc.
 
@@ -72,10 +73,18 @@ The setup script prints registrar-specific instructions for Namecheap, Porkbun, 
 
 ```bash
 cp .env.example .env
-# Edit .env: set ROUTEROOT_DOMAIN, ROUTEROOT_SERVER_IP, ROUTEROOT_API_KEY
+# Edit .env: set ROUTEROOT_DOMAIN, ROUTEROOT_SERVER_IP (must be your actual public IP), ROUTEROOT_API_KEY
+
+# Generate zone file for your domain (setup.sh does this automatically)
+mkdir -p coredns/zones data
+# Create coredns/zones/db.yourdomain with A records pointing to your server IP
+
 docker compose up -d
 curl http://localhost:8053/api/health
 ```
+
+Note: The agent-api container needs Docker access (socket is mounted) and includes `docker-ce-cli` for builds.
+Caddy needs `host.docker.internal` resolution to reach deployment containers (configured via `extra_hosts` in docker-compose.yml).
 
 ### 3. Deploy your first branch
 
@@ -287,7 +296,7 @@ Environment variables: `ROUTEROOT_URL`, `ROUTEROOT_API_KEY`
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ROUTEROOT_DOMAIN` | `routeroot.dev` | Your domain |
-| `ROUTEROOT_SERVER_IP` | `127.0.0.1` | Server public IP |
+| `ROUTEROOT_SERVER_IP` | `127.0.0.1` | Server public IP (must match DNS zone A records) |
 | `ROUTEROOT_API_KEY` | `dev-key` | API authentication key |
 | `ROUTEROOT_MAX_DEPLOYMENTS` | `20` | Max concurrent deployments |
 | `ROUTEROOT_DEFAULT_TTL` | `48h` | Default preview expiry |
@@ -295,18 +304,30 @@ Environment variables: `ROUTEROOT_URL`, `ROUTEROOT_API_KEY`
 | `ROUTEROOT_MAX_CPUS` | `2` | CPUs per container |
 | `ROUTEROOT_LOG_FORMAT` | (human) | Set to `json` for structured logging |
 | `ROUTEROOT_GITHUB_WEBHOOK_SECRET` | (none) | GitHub webhook HMAC secret |
+| `ROUTEROOT_CADDY_ADMIN` | `http://caddy:2019` | Caddy JSON admin API (set by docker-compose) |
+| `DATABASE_PATH` | `/data/routeroot.db` | SQLite DB path (set by docker-compose) |
+| `ZONE_FILE_PATH` | `/dns-zones/db.domain` | CoreDNS zone file path (set by docker-compose) |
 
 ## Architecture
 
 ```
-Internet → CoreDNS (:53)  ← authoritative DNS, wildcard *.domain → server IP
-         → Caddy (:443)   ← reverse proxy, on-demand TLS, routes to containers
+Internet → CoreDNS (:53)     ← authoritative DNS, wildcard *.domain → server IP
+         → Caddy (:443)      ← reverse proxy, on-demand TLS, JSON API config
          → Agent API (:8053) ← control plane, manages everything
                 ↓
-           Docker containers ← one per deployment, resource-limited
+           Docker containers  ← one per deployment, bind 0.0.0.0, resource-limited
                 ↓
-           SQLite ← deployment state, plans, audit log
+           SQLite             ← deployment state, plans, audit log
 ```
+
+**Key architectural details:**
+- Agent-API runs in Docker, connects to host Docker via mounted `/var/run/docker.sock`
+- `docker-ce-cli` is installed in the agent-api container (from official Docker repo) for image builds
+- Caddy is configured via JSON API at startup (not just Caddyfile) — see `proxy.rs::init_caddy_config`
+- Caddy reaches deployed containers via `host.docker.internal` (`extra_hosts` in docker-compose)
+- Deployed containers bind to `0.0.0.0` (not `127.0.0.1`) so Caddy can route to them
+- Path-prefix routes are inserted before the root domain catch-all for correct ordering
+- DNS zone files must have A records pointing to the actual server IP
 
 ## Scaling
 

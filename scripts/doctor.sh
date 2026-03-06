@@ -221,6 +221,44 @@ else
     echo "  OK: Disk (${DISK_USAGE}%)"
 fi
 
+# --- Check host.docker.internal resolution from Caddy ---
+CADDY_CONTAINER=$(docker compose ps -q caddy 2>/dev/null | head -1)
+if [ -n "$CADDY_CONTAINER" ]; then
+    if docker exec "$CADDY_CONTAINER" getent hosts host.docker.internal >/dev/null 2>&1; then
+        echo "  OK: host.docker.internal resolves in Caddy container"
+    else
+        echo "  ERROR: host.docker.internal does NOT resolve in Caddy container"
+        echo "         Ensure docker-compose.yml has extra_hosts: [\"host.docker.internal:host-gateway\"] on caddy service"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo "  SKIP: Caddy container not running, cannot check host.docker.internal"
+fi
+
+# --- Check Docker CLI in agent-api container ---
+API_CONTAINER=$(docker compose ps -q agent-api 2>/dev/null | head -1)
+if [ -n "$API_CONTAINER" ]; then
+    if docker exec "$API_CONTAINER" docker --version >/dev/null 2>&1; then
+        DOCKER_CLI_VER=$(docker exec "$API_CONTAINER" docker --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+        echo "  OK: Docker CLI in agent-api container (v${DOCKER_CLI_VER:-unknown})"
+    else
+        echo "  ERROR: Docker CLI (docker-ce-cli) NOT found in agent-api container"
+        echo "         The agent-api Dockerfile must install docker-ce-cli from official Docker repo"
+        ERRORS=$((ERRORS + 1))
+    fi
+
+    # Check Docker socket is accessible
+    if docker exec "$API_CONTAINER" docker info >/dev/null 2>&1; then
+        echo "  OK: Docker socket accessible from agent-api container"
+    else
+        echo "  ERROR: Docker socket NOT accessible from agent-api container"
+        echo "         Ensure /var/run/docker.sock is mounted in docker-compose.yml"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo "  SKIP: agent-api container not running, cannot check Docker CLI"
+fi
+
 # --- Check container status ---
 echo ""
 RUNNING=$(docker compose ps --status running -q 2>/dev/null | wc -l || echo "0")

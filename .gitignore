@@ -26,3 +26,4 @@ Thumbs.db
 
 # CoreDNS runtime
 coredns/zones/*.jnl
+data/

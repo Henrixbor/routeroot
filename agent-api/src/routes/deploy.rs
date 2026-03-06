@@ -230,9 +230,19 @@ async fn do_build_and_deploy(
 
     tracing::info!(name = %name, phase = "proxy", "registering proxy route");
     // Register both subdomain route and optional path route
-    state.proxy.add_route(name, &state.config.domain, port).await?;
+    let proxy_result = state.proxy.add_route(name, &state.config.domain, port).await;
+    if let Err(e) = proxy_result {
+        tracing::error!(name = %name, "proxy route failed, cleaning up container: {e}");
+        state.docker.stop_container(&container_id).await.ok();
+        return Err(e);
+    }
     if let Some(prefix) = path_prefix {
-        state.proxy.add_path_route(prefix, &state.config.domain, port).await?;
+        if let Err(e) = state.proxy.add_path_route(prefix, &state.config.domain, port).await {
+            tracing::error!(name = %name, "path route failed, cleaning up container: {e}");
+            state.proxy.remove_route(name).await.ok();
+            state.docker.stop_container(&container_id).await.ok();
+            return Err(e);
+        }
         tracing::info!(name = %name, path_prefix = %prefix, "path route registered");
     }
     state.db.update_deployment_status(name, "running", Some(&container_id), Some(port))?;
@@ -292,6 +302,10 @@ pub async fn delete_deployment(
 
     if let Some(ref container_id) = deployment.container_id {
         state.docker.stop_container(container_id).await?;
+    } else {
+        // Try to clean up orphan container by name (e.g. created but never recorded)
+        let container_name = format!("routeroot-{name}");
+        state.docker.stop_container_by_name(&container_name).await.ok();
     }
 
     state.proxy.remove_route(&name).await.ok();
