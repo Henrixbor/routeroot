@@ -1,5 +1,5 @@
 .:53 {
-    file /etc/coredns/zones/db.{$AGENTDNS_DOMAIN:routeroot.dev} {$AGENTDNS_DOMAIN:routeroot.dev}
+    file /etc/coredns/zones/db.routeroot.dev routeroot.dev
     reload 5s
     log
     errors

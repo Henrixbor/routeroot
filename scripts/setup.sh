@@ -137,6 +137,18 @@ AGENTDNS_MAX_CPUS=2
 AGENTDNS_LOG_FORMAT=json
 EOF
 
+# Generate Corefile with actual domain (CoreDNS doesn't support env var defaults)
+cat > coredns/Corefile <<EOF
+.:53 {
+    file /etc/coredns/zones/db.${DOMAIN} ${DOMAIN}
+    reload 5s
+    log
+    errors
+    health :8054
+    ready :8055
+}
+EOF
+
 cat > "coredns/zones/db.$DOMAIN" <<EOF
 \$ORIGIN ${DOMAIN}.
 \$TTL 300
@@ -172,6 +184,15 @@ if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "active"; then
     ufw allow 8053/tcp >/dev/null
 else
     echo "[6/7] Firewall (skipped)"
+fi
+
+# --- Free port 53 if systemd-resolved is hogging it ---
+if ss -tlnp 2>/dev/null | grep -q "systemd-resolve.*:53"; then
+    echo "  Disabling systemd-resolved (conflicts with port 53)..."
+    systemctl stop systemd-resolved 2>/dev/null || true
+    systemctl disable systemd-resolved 2>/dev/null || true
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 fi
 
 # --- Step 7: Build and start ---
