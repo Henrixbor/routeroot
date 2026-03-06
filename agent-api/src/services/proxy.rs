@@ -23,6 +23,7 @@ impl ProxyService {
 
         let route = json!({
             "@id": route_id,
+            "terminal": true,
             "match": [{ "host": [host] }],
             "handle": [{
                 "handler": "reverse_proxy",
@@ -54,6 +55,7 @@ impl ProxyService {
 
         let route = json!({
             "@id": route_id,
+            "terminal": true,
             "match": [{ "host": [custom_domain] }],
             "handle": [{
                 "handler": "reverse_proxy",
@@ -95,11 +97,13 @@ impl ProxyService {
     }
 
     /// Register a path-based route: domain/path/* → localhost:port
+    /// Inserted at front of routes array so it matches before the root domain catch-all.
     pub async fn add_path_route(&self, path_prefix: &str, domain: &str, target_port: u16) -> Result<(), AppError> {
         let route_id = format!("routeroot-path-{}", path_prefix.replace('/', "-"));
 
         let route = json!({
             "@id": route_id,
+            "terminal": true,
             "match": [{
                 "host": [domain],
                 "path": [format!("/{}/*", path_prefix)]
@@ -116,19 +120,7 @@ impl ProxyService {
             ]
         });
 
-        let url = format!("{}/config/apps/http/servers/srv0/routes", self.admin_url);
-
-        let resp = self.client
-            .post(&url)
-            .json(&route)
-            .send()
-            .await
-            .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(AppError::Internal(format!("caddy path route failed: {body}")));
-        }
+        self.insert_route_at_front(route).await?;
 
         tracing::info!("Added Caddy path route: {domain}/{path_prefix} → localhost:{target_port}");
         Ok(())
@@ -149,21 +141,23 @@ impl ProxyService {
         Ok(())
     }
 
-    /// Patch the Caddyfile's wildcard route to non-terminal so dynamic routes can match
-    pub async fn patch_wildcard_non_terminal(&self) -> Result<(), AppError> {
+    /// Patch Caddyfile wildcard route to non-terminal so dynamic subdomain routes match.
+    /// Also reorders routes so path-prefix routes come before the root domain catch-all.
+    pub async fn patch_caddyfile_routes(&self, domain: &str) -> Result<(), AppError> {
         let url = format!("{}/config/apps/http/servers/srv0/routes", self.admin_url);
         let resp = self.client.get(&url).send().await
             .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
         let routes: Vec<serde_json::Value> = resp.json().await
             .map_err(|e| AppError::Internal(format!("failed to parse routes: {e}")))?;
 
+        let wildcard = format!("*.{domain}");
         for (i, route) in routes.iter().enumerate() {
             let hosts = route.get("match")
                 .and_then(|m| m.as_array())
                 .and_then(|arr| arr.first())
                 .and_then(|m| m.get("host"))
                 .and_then(|h| h.as_array());
-            let is_wildcard = hosts.map_or(false, |h| h.iter().any(|v| v.as_str().map_or(false, |s| s.starts_with("*."))));
+            let is_wildcard = hosts.map_or(false, |h| h.iter().any(|v| v.as_str().map_or(false, |s| s == wildcard)));
             let is_terminal = route.get("terminal").and_then(|t| t.as_bool()).unwrap_or(false);
 
             if is_wildcard && is_terminal {
@@ -172,9 +166,36 @@ impl ProxyService {
                     .json(&false)
                     .send()
                     .await
-                    .map_err(|e| AppError::Internal(format!("failed to patch wildcard: {e}")))?;
+                    .map_err(|e| AppError::Internal(format!("failed to patch route: {e}")))?;
                 tracing::info!("Patched wildcard route at index {} to non-terminal", i);
             }
+        }
+        Ok(())
+    }
+
+    /// Insert a route at the beginning of the routes array (before Caddyfile routes).
+    /// Used for path-prefix routes that must match before the root domain catch-all.
+    async fn insert_route_at_front(&self, route: serde_json::Value) -> Result<(), AppError> {
+        // Read current routes
+        let url = format!("{}/config/apps/http/servers/srv0/routes", self.admin_url);
+        let resp = self.client.get(&url).send().await
+            .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
+        let mut routes: Vec<serde_json::Value> = resp.json().await
+            .map_err(|e| AppError::Internal(format!("failed to parse routes: {e}")))?;
+
+        // Insert at front
+        routes.insert(0, route);
+
+        // PUT the full array back
+        let resp = self.client.put(&url)
+            .json(&routes)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!("caddy route insert failed: {body}")));
         }
         Ok(())
     }
