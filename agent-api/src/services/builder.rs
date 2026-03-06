@@ -162,7 +162,7 @@ CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000
     // Static site (fallback)
     if work_dir.join("index.html").exists() {
         let dockerfile = r#"FROM caddy:alpine
-COPY . /srv
+COPY . /usr/share/caddy
 EXPOSE 80
 "#;
         return Ok((Some(dockerfile.into()), 80));
