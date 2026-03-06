@@ -80,7 +80,7 @@ impl Database {
     }
 
     pub fn migrate(&self) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS deployments (
                 id TEXT PRIMARY KEY,
@@ -144,7 +144,7 @@ impl Database {
     // --- Deployments ---
 
     pub fn insert_deployment(&self, d: &Deployment) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute(
             "INSERT INTO deployments (id, name, repo, branch, container_id, port, status, verified, environment, url, created_at, expires_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
@@ -154,7 +154,7 @@ impl Database {
     }
 
     pub fn update_deployment_status(&self, name: &str, status: &str, container_id: Option<&str>, port: Option<u16>) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute(
             "UPDATE deployments SET status = ?1, container_id = ?2, port = ?3 WHERE name = ?4",
             params![status, container_id, port, name],
@@ -163,7 +163,7 @@ impl Database {
     }
 
     pub fn update_deployment_verified(&self, name: &str, verified: &str) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute(
             "UPDATE deployments SET verified = ?1 WHERE name = ?2",
             params![verified, name],
@@ -172,13 +172,13 @@ impl Database {
     }
 
     pub fn clear_deployment_expiry(&self, name: &str) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute("UPDATE deployments SET expires_at = NULL WHERE name = ?1", params![name])?;
         Ok(())
     }
 
     pub fn update_deployment_environment(&self, name: &str, environment: &str, new_url: &str) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute(
             "UPDATE deployments SET environment = ?1, url = ?2 WHERE name = ?3",
             params![environment, new_url, name],
@@ -204,7 +204,7 @@ impl Database {
     }
 
     pub fn get_deployment(&self, name: &str) -> Result<Option<Deployment>, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, repo, branch, container_id, port, status, verified, environment, url, created_at, expires_at FROM deployments WHERE name = ?1"
         )?;
@@ -213,7 +213,7 @@ impl Database {
     }
 
     pub fn list_deployments(&self) -> Result<Vec<Deployment>, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, repo, branch, container_id, port, status, verified, environment, url, created_at, expires_at FROM deployments ORDER BY created_at DESC"
         )?;
@@ -222,13 +222,13 @@ impl Database {
     }
 
     pub fn delete_deployment(&self, name: &str) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute("DELETE FROM deployments WHERE name = ?1", params![name])?;
         Ok(())
     }
 
     pub fn count_active_deployments(&self) -> Result<usize, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let count: usize = conn.query_row(
             "SELECT COUNT(*) FROM deployments WHERE status NOT IN ('stopped', 'failed')",
             [],
@@ -237,8 +237,18 @@ impl Database {
         Ok(count)
     }
 
+    pub fn is_port_in_use(&self, port: u16) -> Result<bool, AppError> {
+        let conn = self.conn_lock()?;
+        let count: usize = conn.query_row(
+            "SELECT COUNT(*) FROM deployments WHERE port = ?1 AND status NOT IN ('stopped', 'failed')",
+            params![port],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
     pub fn get_expired_deployments(&self, now: &str) -> Result<Vec<Deployment>, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, repo, branch, container_id, port, status, verified, environment, url, created_at, expires_at
              FROM deployments WHERE expires_at IS NOT NULL AND expires_at < ?1 AND status NOT IN ('stopped', 'failed')"
@@ -250,7 +260,7 @@ impl Database {
     // --- DNS Records ---
 
     pub fn insert_dns_record(&self, r: &DnsRecord) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute(
             "INSERT INTO dns_records (id, name, record_type, value, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![r.id, r.name, r.record_type, r.value, r.created_at],
@@ -259,7 +269,7 @@ impl Database {
     }
 
     pub fn list_dns_records(&self) -> Result<Vec<DnsRecord>, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let mut stmt = conn.prepare("SELECT id, name, record_type, value, created_at FROM dns_records ORDER BY name")?;
         let rows = stmt.query_map([], |row| {
             Ok(DnsRecord {
@@ -274,7 +284,7 @@ impl Database {
     }
 
     pub fn delete_dns_record(&self, name: &str) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute("DELETE FROM dns_records WHERE name = ?1", params![name])?;
         Ok(())
     }
@@ -282,7 +292,7 @@ impl Database {
     // --- Deploy Plans ---
 
     pub fn insert_plan(&self, p: &DeployPlan) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute(
             "INSERT INTO deploy_plans (id, repo, branch, name, environment, url, ttl, actions, status, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -292,7 +302,7 @@ impl Database {
     }
 
     pub fn get_plan(&self, id: &str) -> Result<Option<DeployPlan>, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, repo, branch, name, environment, url, ttl, actions, status, created_at FROM deploy_plans WHERE id = ?1"
         )?;
@@ -314,13 +324,13 @@ impl Database {
     }
 
     pub fn update_plan_status(&self, id: &str, status: &str) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute("UPDATE deploy_plans SET status = ?1 WHERE id = ?2", params![status, id])?;
         Ok(())
     }
 
     pub fn list_plans(&self) -> Result<Vec<DeployPlan>, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, repo, branch, name, environment, url, ttl, actions, status, created_at FROM deploy_plans ORDER BY created_at DESC LIMIT 50"
         )?;
@@ -344,7 +354,7 @@ impl Database {
     // --- Custom Domains ---
 
     pub fn insert_custom_domain(&self, d: &CustomDomain) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute(
             "INSERT INTO custom_domains (id, domain, deployment_name, verified, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![d.id, d.domain, d.deployment_name, d.verified, d.created_at],
@@ -353,7 +363,7 @@ impl Database {
     }
 
     pub fn get_custom_domain(&self, domain: &str) -> Result<Option<CustomDomain>, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, domain, deployment_name, verified, created_at FROM custom_domains WHERE domain = ?1"
         )?;
@@ -370,7 +380,7 @@ impl Database {
     }
 
     pub fn list_custom_domains(&self) -> Result<Vec<CustomDomain>, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, domain, deployment_name, verified, created_at FROM custom_domains ORDER BY created_at DESC"
         )?;
@@ -387,7 +397,7 @@ impl Database {
     }
 
     pub fn list_custom_domains_for_deployment(&self, deployment_name: &str) -> Result<Vec<CustomDomain>, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, domain, deployment_name, verified, created_at FROM custom_domains WHERE deployment_name = ?1"
         )?;
@@ -404,13 +414,13 @@ impl Database {
     }
 
     pub fn delete_custom_domain(&self, domain: &str) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute("DELETE FROM custom_domains WHERE domain = ?1", params![domain])?;
         Ok(())
     }
 
     pub fn is_custom_domain(&self, domain: &str) -> Result<bool, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let count: usize = conn.query_row(
             "SELECT COUNT(*) FROM custom_domains WHERE domain = ?1",
             params![domain],
@@ -422,7 +432,7 @@ impl Database {
     // --- Audit Log ---
 
     pub fn insert_audit(&self, event: &AuditEvent) -> Result<(), AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         conn.execute(
             "INSERT INTO audit_log (id, action, resource_type, resource_name, actor, details, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -432,7 +442,7 @@ impl Database {
     }
 
     pub fn list_audit(&self, limit: usize) -> Result<Vec<AuditEvent>, AppError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn_lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, action, resource_type, resource_name, actor, details, created_at FROM audit_log ORDER BY created_at DESC LIMIT ?1"
         )?;

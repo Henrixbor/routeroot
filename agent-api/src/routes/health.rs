@@ -78,9 +78,14 @@ pub async fn tls_check(
         return axum::http::StatusCode::NOT_FOUND;
     }
 
-    // Allow verified custom domains mapped to active deployments
-    if state.db.is_custom_domain(&domain).unwrap_or(false) {
-        return axum::http::StatusCode::OK;
+    // Allow custom domains mapped to deployments
+    if let Ok(Some(custom)) = state.db.get_custom_domain(&domain) {
+        // Check the linked deployment is still running
+        if let Ok(Some(dep)) = state.db.get_deployment(&custom.deployment_name) {
+            if dep.status == "running" || dep.status == "building" {
+                return axum::http::StatusCode::OK;
+            }
+        }
     }
 
     axum::http::StatusCode::NOT_FOUND

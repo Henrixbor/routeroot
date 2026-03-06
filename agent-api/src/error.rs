@@ -26,7 +26,11 @@ impl IntoResponse for AppError {
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::LimitReached(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".into()),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
+            AppError::Internal(msg) => {
+                // Log the real error server-side, return generic message to client
+                tracing::error!("internal error: {msg}");
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+            }
         };
 
         let body = axum::Json(json!({ "error": message }));

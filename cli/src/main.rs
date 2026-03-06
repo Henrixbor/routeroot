@@ -8,8 +8,8 @@ struct Cli {
     #[arg(long, env = "ROUTEROOT_URL", default_value = "http://localhost:8053")]
     server: String,
 
-    /// API key
-    #[arg(long, env = "ROUTEROOT_API_KEY", default_value = "dev-key")]
+    /// API key (required — set ROUTEROOT_API_KEY env var or pass --key)
+    #[arg(long, env = "ROUTEROOT_API_KEY")]
     key: String,
 
     #[command(subcommand)]

@@ -55,7 +55,7 @@ pub async fn create_plan(
     }
 
     let url = format!("https://{}.{}", name, state.config.domain);
-    let port = allocate_port(&name);
+    let port = allocate_port(&name, &state.db);
 
     let actions = serde_json::json!([
         {"action": "clone_repo", "repo": req.repo, "branch": branch},
@@ -222,7 +222,7 @@ async fn do_build_and_deploy(
 ) -> Result<(), AppError> {
     tracing::info!(name = %name, phase = "clone_build", "starting clone and build");
     let (image_tag, container_port) = builder::clone_and_build(repo, branch, name).await?;
-    let port = allocate_port(name);
+    let port = allocate_port(name, &state.db);
 
     tracing::info!(name = %name, phase = "container", image = %image_tag, host_port = port, container_port = container_port, "starting container");
     let container_id = state.docker.run_container(
@@ -374,11 +374,19 @@ fn audit(state: &AppState, action: &str, resource_type: &str, resource_name: &st
 // --- Helpers ---
 
 pub(crate) fn sanitize_name(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' })
+    let name: String = s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' })
         .collect::<String>()
         .trim_matches('-')
-        .to_string()
+        .to_string();
+    // Enforce DNS label limits: 1-63 chars
+    if name.is_empty() {
+        "unnamed".to_string()
+    } else if name.len() > 63 {
+        name[..63].trim_end_matches('-').to_string()
+    } else {
+        name
+    }
 }
 
 fn repo_short_name(repo: &str) -> String {
@@ -389,9 +397,18 @@ fn repo_short_name(repo: &str) -> String {
         .to_string()
 }
 
-fn allocate_port(name: &str) -> u16 {
+fn allocate_port(name: &str, db: &crate::db::Database) -> u16 {
     let hash: u32 = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
-    32000 + (hash % 16000) as u16
+    let base = 32000 + (hash % 16000) as u16;
+    // Probe for a free port if there's a collision
+    for offset in 0..100u16 {
+        let port = base + offset;
+        if port > 48000 { break; }
+        if !db.is_port_in_use(port).unwrap_or(false) {
+            return port;
+        }
+    }
+    base // fallback — container start will fail if truly in use
 }
 
 fn parse_ttl(s: &str) -> u64 {

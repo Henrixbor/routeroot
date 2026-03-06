@@ -39,6 +39,13 @@ impl DockerService {
             port_bindings: Some(port_bindings),
             memory: Some((max_memory_mb * 1024 * 1024) as i64),
             nano_cpus: Some((max_cpus * 1_000_000_000) as i64),
+            // Security: prevent privilege escalation and limit resources
+            security_opt: Some(vec!["no-new-privileges:true".into()]),
+            pids_limit: Some(256),
+            // No volume mounts — deployed containers cannot access host filesystem
+            binds: Some(vec![]),
+            // Read-only root filesystem where possible (apps can use tmpfs)
+            tmpfs: Some(HashMap::from([("/tmp".into(), "size=256M".into())])),
             ..Default::default()
         };
 

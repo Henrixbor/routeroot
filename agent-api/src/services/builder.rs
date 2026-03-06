@@ -59,8 +59,9 @@ pub async fn clone_and_build(repo: &str, branch: &str, name: &str) -> Result<(St
     if !clone_output.status.success() {
         let stderr = String::from_utf8_lossy(&clone_output.stderr);
         tracing::error!(repo = %repo, branch = %branch, stderr = %stderr, "git clone failed");
+        std::fs::remove_dir_all(&work_dir).ok();
         return Err(AppError::BadRequest(format!(
-            "git clone failed for {repo}@{branch}: {stderr}"
+            "git clone failed for {repo}@{branch} — check the repo URL and branch name"
         )));
     }
 
@@ -91,12 +92,12 @@ pub async fn clone_and_build(repo: &str, branch: &str, name: &str) -> Result<(St
     if !build_output.status.success() {
         let stderr = String::from_utf8_lossy(&build_output.stderr);
         let stdout = String::from_utf8_lossy(&build_output.stdout);
-        // Log last 50 lines of build output for debugging
         let combined = format!("{stdout}\n{stderr}");
         let last_lines: String = combined.lines().rev().take(50).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
         tracing::error!(name = %name, build_output = %last_lines, "docker build failed");
-        return Err(AppError::Internal(format!(
-            "docker build failed for '{name}':\n{last_lines}"
+        std::fs::remove_dir_all(&work_dir).ok();
+        return Err(AppError::BadRequest(format!(
+            "docker build failed for '{name}'. Check your Dockerfile or project configuration. Last output:\n{last_lines}"
         )));
     }
 
