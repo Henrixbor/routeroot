@@ -27,7 +27,7 @@ RouteRoot is a self-hosted alternative to Vercel/Netlify preview deployments, bu
 - **Promote** — Move preview → staging → production
 - **Custom Domains** — Map `client.com` to any deployment
 - **Path Routing** — Deploy at `yourdomain.dev/client/staging` instead of subdomains
-- **MCP Server** — 16 tools for Claude Code / any MCP client
+- **MCP Server** — 19 tools for Claude Code / any MCP client
 - **CLI** — `routeroot deploy`, `ls`, `logs`, `down`, `promote`, `audit`, `setup`
 - **GitHub Webhooks** — Auto-deploy on push, auto-teardown on branch delete
 - **DNS Management** — Create/delete DNS records via API (NS/SOA/CAA protected)
@@ -131,7 +131,7 @@ Or configure manually — add to `~/.claude/mcp.json`:
 }
 ```
 
-Restart Claude Code — 16 tools become available. Now Claude Code can deploy branches, check status, read logs, and tear down previews autonomously.
+Restart Claude Code — 19 tools become available. Now Claude Code can deploy branches, check status, read logs, and tear down previews autonomously.
 
 ## API Reference
 
@@ -243,6 +243,25 @@ curl -X POST https://api.yourdomain.dev/api/deploy \
 # => https://yourdomain.dev/client/staging
 ```
 
+### Managed Domains (dynamic)
+
+```bash
+# Add a new domain dynamically (no server restart needed)
+curl -X POST https://api.yourdomain.dev/api/managed-domains \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"domain": "vibeyard.io"}'
+# Creates zone file, updates CoreDNS, adds Caddy TLS + routes
+# Returns registrar DNS setup instructions
+
+# List all managed domains
+curl https://api.yourdomain.dev/api/managed-domains -H "Authorization: Bearer $KEY"
+
+# Remove a dynamically added domain
+curl -X DELETE https://api.yourdomain.dev/api/managed-domains/vibeyard.io \
+  -H "Authorization: Bearer $KEY"
+```
+
 ### Audit Log
 
 ```bash
@@ -311,6 +330,9 @@ docker compose up -d
 | `map_custom_domain` | Map a custom domain (e.g. client.com) to a deployment |
 | `list_custom_domains` | List all custom domain mappings |
 | `delete_custom_domain` | Remove a custom domain mapping |
+| `add_managed_domain` | Dynamically add a new domain (DNS + TLS + routes, no restart) |
+| `list_managed_domains` | List all managed domains (config + dynamic) |
+| `remove_managed_domain` | Remove a dynamically added domain |
 | `setup_github_webhook` | Auto-configure GitHub webhook for a repo (or return manual instructions) |
 
 ## CLI Reference
@@ -359,11 +381,18 @@ Environment variables: `ROUTEROOT_URL`, `ROUTEROOT_API_KEY`
 
 ## Multi-Domain Support
 
-RouteRoot can serve multiple domains simultaneously:
+RouteRoot can serve multiple domains simultaneously. Domains can be added two ways:
 
+**Option A: Static config (in .env)**
 ```bash
-# In .env:
 ROUTEROOT_DOMAINS=routeroot.dev,vibeyard.io
+```
+
+**Option B: Dynamic via API (no restart needed)**
+```bash
+curl -X POST https://api.yourdomain.dev/api/managed-domains \
+  -H "Authorization: Bearer $KEY" \
+  -d '{"domain": "vibeyard.io"}'
 ```
 
 Each domain gets:

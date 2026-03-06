@@ -19,6 +19,33 @@ pub struct AppState {
     pub dns: services::dns::DnsService,
 }
 
+impl AppState {
+    /// Get all managed domains: config domains + dynamically added domains from DB.
+    /// Deduplicates and preserves order (config domains first).
+    pub fn all_domains(&self) -> Vec<String> {
+        let mut domains = self.config.domains.clone();
+        if let Ok(db_domains) = self.db.list_managed_domains() {
+            for (d, _, _) in db_domains {
+                if !domains.contains(&d) {
+                    domains.push(d);
+                }
+            }
+        }
+        domains
+    }
+
+    /// Check if a domain is managed (either in config or DB)
+    pub fn is_domain_managed(&self, domain: &str) -> bool {
+        self.config.is_managed_domain(domain)
+            || self.db.is_managed_domain_in_db(domain).unwrap_or(false)
+    }
+
+    /// Check if a hostname is a subdomain of any managed domain
+    pub fn is_subdomain_managed(&self, hostname: &str) -> bool {
+        self.all_domains().iter().any(|d| hostname.ends_with(&format!(".{d}")))
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // JSON structured logging for agent-parseable output
@@ -53,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
 
     let docker = services::docker::DockerService::new()?;
     let proxy = services::proxy::ProxyService::new(&config.caddy_admin_url);
-    let dns = services::dns::DnsService::new(&config.zone_file_dir, &config.domains, &config.server_ip);
+    let dns = services::dns::DnsService::new(&config.zone_file_dir, &config.corefile_path, &config.domains, &config.server_ip);
 
     let state = Arc::new(AppState { config, db, docker, proxy, dns });
 
@@ -71,7 +98,8 @@ async fn main() -> anyhow::Result<()> {
             // Wait for Caddy to be ready
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             let tls_check_url = "http://agent-api:8053/api/tls-check";
-            if let Err(e) = state_clone.proxy.init_caddy_config(&state_clone.config.domains, tls_check_url).await {
+            let all_domains = state_clone.all_domains();
+            if let Err(e) = state_clone.proxy.init_caddy_config(&all_domains, tls_check_url).await {
                 tracing::warn!("Failed to initialize Caddy config: {e}");
                 return;
             }
@@ -124,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
         .layer({
             use tower_http::cors::{AllowOrigin, AllowHeaders, AllowMethods};
             use axum::http::{Method, HeaderName};
-            let origins: Vec<_> = state.config.domains.iter()
+            let origins: Vec<_> = state.all_domains().iter()
                 .flat_map(|d| [
                     format!("https://{d}").parse().ok(),
                     format!("https://api.{d}").parse().ok(),

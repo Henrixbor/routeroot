@@ -136,7 +136,12 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_deployments_status ON deployments(status);
             CREATE INDEX IF NOT EXISTS idx_plans_status ON deploy_plans(status);
             CREATE INDEX IF NOT EXISTS idx_custom_domains_domain ON custom_domains(domain);
-            CREATE INDEX IF NOT EXISTS idx_custom_domains_deployment ON custom_domains(deployment_name);"
+            CREATE INDEX IF NOT EXISTS idx_custom_domains_deployment ON custom_domains(deployment_name);
+            CREATE TABLE IF NOT EXISTS managed_domains (
+                domain TEXT PRIMARY KEY,
+                server_ip TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );"
         )?;
         Ok(())
     }
@@ -423,6 +428,42 @@ impl Database {
         let conn = self.conn_lock()?;
         let count: usize = conn.query_row(
             "SELECT COUNT(*) FROM custom_domains WHERE domain = ?1",
+            params![domain],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    // --- Managed Domains ---
+
+    pub fn insert_managed_domain(&self, domain: &str, server_ip: &str) -> Result<(), AppError> {
+        let conn = self.conn_lock()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO managed_domains (domain, server_ip, created_at) VALUES (?1, ?2, ?3)",
+            params![domain, server_ip, chrono::Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_managed_domains(&self) -> Result<Vec<(String, String, String)>, AppError> {
+        let conn = self.conn_lock()?;
+        let mut stmt = conn.prepare("SELECT domain, server_ip, created_at FROM managed_domains ORDER BY created_at")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| AppError::Internal(e.to_string()))
+    }
+
+    pub fn delete_managed_domain(&self, domain: &str) -> Result<bool, AppError> {
+        let conn = self.conn_lock()?;
+        let changed = conn.execute("DELETE FROM managed_domains WHERE domain = ?1", params![domain])?;
+        Ok(changed > 0)
+    }
+
+    pub fn is_managed_domain_in_db(&self, domain: &str) -> Result<bool, AppError> {
+        let conn = self.conn_lock()?;
+        let count: usize = conn.query_row(
+            "SELECT COUNT(*) FROM managed_domains WHERE domain = ?1",
             params![domain],
             |row| row.get(0),
         )?;

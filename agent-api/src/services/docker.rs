@@ -120,6 +120,15 @@ impl DockerService {
         Ok(())
     }
 
+    /// Restart a container by name (e.g. for CoreDNS after Corefile change).
+    pub async fn restart_container_by_name(&self, container_name: &str) -> Result<(), AppError> {
+        self.client
+            .restart_container(container_name, Some(bollard::container::RestartContainerOptions { t: 5 }))
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to restart container {container_name}: {e}")))?;
+        Ok(())
+    }
+
     pub fn client(&self) -> &Docker {
         &self.client
     }

@@ -247,6 +247,84 @@ impl ProxyService {
         Ok(())
     }
 
+    /// Add a new managed domain to Caddy: TLS policy + api.domain + root domain routes.
+    /// Called when a domain is dynamically added (no full config replace needed).
+    pub async fn add_domain(&self, domain: &str, _tls_check_url: &str) -> Result<(), AppError> {
+        // 1. Add TLS automation policy for *.domain
+        let policy = json!({
+            "subjects": [format!("*.{domain}")],
+            "issuers": [{ "module": "acme" }],
+            "on_demand": true
+        });
+
+        let url = format!("{}/config/apps/tls/automation/policies", self.admin_url);
+        let resp = self.client.post(&url).json(&policy).send().await
+            .map_err(|e| AppError::Internal(format!("caddy TLS policy add failed: {e}")))?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            tracing::warn!("caddy TLS policy add for {domain}: {body}");
+        }
+
+        // 2. Add api.domain route (insert at beginning for priority)
+        let api_host = format!("api.{domain}");
+        let api_route = json!({
+            "@id": format!("routeroot-api-{}", domain.replace('.', "-")),
+            "match": [{ "host": [&api_host] }],
+            "handle": [{
+                "handler": "reverse_proxy",
+                "upstreams": [{ "dial": "agent-api:8053" }]
+            }],
+            "terminal": true
+        });
+
+        // Read current routes, insert api route at the beginning
+        let routes_url = format!("{}/config/apps/http/servers/srv0/routes", self.admin_url);
+        let resp = self.client.get(&routes_url).send().await
+            .map_err(|e| AppError::Internal(format!("caddy routes read failed: {e}")))?;
+        let mut routes: Vec<serde_json::Value> = resp.json().await
+            .map_err(|e| AppError::Internal(format!("failed to parse routes: {e}")))?;
+
+        // Insert api route at the beginning
+        routes.insert(0, api_route);
+
+        // Add root domain route at the end (before any existing root catch-alls)
+        let root_route = json!({
+            "@id": format!("routeroot-root-{}", domain.replace('.', "-")),
+            "match": [{ "host": [domain] }],
+            "handle": [{
+                "handler": "reverse_proxy",
+                "upstreams": [{ "dial": "agent-api:8053" }]
+            }]
+        });
+        routes.push(root_route);
+
+        let resp = self.client.patch(&routes_url).json(&routes).send().await
+            .map_err(|e| AppError::Internal(format!("caddy routes update failed: {e}")))?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!("caddy domain routes add failed: {body}")));
+        }
+
+        tracing::info!("Added Caddy domain: {domain} (api + root routes + TLS policy)");
+        Ok(())
+    }
+
+    /// Remove a managed domain from Caddy: remove its routes and TLS policy.
+    pub async fn remove_domain(&self, domain: &str) -> Result<(), AppError> {
+        // Remove api route
+        let api_id = format!("routeroot-api-{}", domain.replace('.', "-"));
+        let url = format!("{}/id/{api_id}", self.admin_url);
+        self.client.delete(&url).send().await.ok();
+
+        // Remove root route
+        let root_id = format!("routeroot-root-{}", domain.replace('.', "-"));
+        let url = format!("{}/id/{root_id}", self.admin_url);
+        self.client.delete(&url).send().await.ok();
+
+        tracing::info!("Removed Caddy routes for domain: {domain}");
+        Ok(())
+    }
+
     /// Remove a route by subdomain
     pub async fn remove_route(&self, subdomain: &str) -> Result<(), AppError> {
         let route_id = format!("routeroot-{subdomain}");

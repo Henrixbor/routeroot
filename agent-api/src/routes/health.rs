@@ -23,7 +23,7 @@ pub async fn health(
         status: "ok".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         domain: state.config.domain.clone(),
-        domains: state.config.domains.clone(),
+        domains: state.all_domains(),
         active_deployments: count,
         max_deployments: state.config.max_deployments,
         features: vec![
@@ -56,14 +56,14 @@ pub async fn tls_check(
     };
 
     // Allow managed domains themselves
-    if state.config.is_managed_domain(&domain) {
+    if state.is_domain_managed(&domain) {
         return axum::http::StatusCode::OK;
     }
 
     // Allow subdomains only if there's a matching deployment or it's api.*
-    if state.config.is_managed_subdomain(&domain) {
+    if state.is_subdomain_managed(&domain) {
         // Always allow api.domain
-        for d in &state.config.domains {
+        for d in &state.all_domains() {
             if domain == format!("api.{d}") {
                 return axum::http::StatusCode::OK;
             }

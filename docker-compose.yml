@@ -6,8 +6,7 @@ services:
       - "53:53/udp"
       - "53:53/tcp"
     volumes:
-      - ./coredns/Corefile:/etc/coredns/Corefile:ro
-      - ./coredns/zones:/etc/coredns/zones
+      - ./coredns:/etc/coredns
     networks:
       - internal
     restart: always
@@ -36,7 +35,7 @@ services:
       - "127.0.0.1:8053:8053"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./coredns/zones:/dns-zones
+      - ./coredns:/dns-config
       - ./data:/data
     environment:
       - ROUTEROOT_DOMAIN=${ROUTEROOT_DOMAIN:-routeroot.dev}
@@ -52,7 +51,8 @@ services:
       - ROUTEROOT_ALLOWED_REPO_HOSTS=${ROUTEROOT_ALLOWED_REPO_HOSTS:-github.com,gitlab.com,bitbucket.org}
       - ROUTEROOT_LOG_FORMAT=${ROUTEROOT_LOG_FORMAT:-human}
       - DATABASE_PATH=/data/routeroot.db
-      - ZONE_FILE_DIR=/dns-zones
+      - ZONE_FILE_DIR=/dns-config/zones
+      - COREFILE_PATH=/dns-config/Corefile
     depends_on:
       - coredns
       - caddy

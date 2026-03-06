@@ -14,6 +14,7 @@ pub struct Config {
     pub github_webhook_secret: Option<String>,
     pub database_path: String,
     pub zone_file_dir: String,
+    pub corefile_path: String,
     pub allowed_repo_hosts: Vec<String>,
 }
 
@@ -67,8 +68,10 @@ impl Config {
                 .unwrap_or_else(|_| "/data/routeroot.db".into()),
             zone_file_dir: env::var("ZONE_FILE_DIR")
                 .unwrap_or_else(|_| env::var("ZONE_FILE_PATH")
-                    .map(|p| p.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_else(|| "/dns-zones".into()))
-                    .unwrap_or_else(|_| "/dns-zones".into())),
+                    .map(|p| p.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_else(|| "/dns-config/zones".into()))
+                    .unwrap_or_else(|_| "/dns-config/zones".into())),
+            corefile_path: env::var("COREFILE_PATH")
+                .unwrap_or_else(|_| "/dns-config/Corefile".into()),
             allowed_repo_hosts,
         }
     }

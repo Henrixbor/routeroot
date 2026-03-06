@@ -91,6 +91,11 @@ POST /api/domains              Map custom domain to deployment
 GET  /api/domains              List custom domain mappings
 DEL  /api/domains/{domain}     Remove custom domain mapping
 
+# Managed Domains (dynamic, no restart)
+POST /api/managed-domains      Add a new domain dynamically
+GET  /api/managed-domains      List all managed domains
+DEL  /api/managed-domains/{d}  Remove a dynamically added domain
+
 # Audit
 GET  /api/audit                View audit log
 
@@ -130,12 +135,13 @@ Add to your Claude Code MCP config (`~/.claude/mcp.json`):
 }
 ```
 
-MCP Tools available (16):
+MCP Tools available (19):
 - `deploy_preview` — deploy a branch (subdomain or path-based)
 - `list_deployments`, `get_deployment`, `teardown`, `get_logs`
 - `create_dns_record`, `list_dns_records`, `delete_dns_record`
 - `health`, `promote`, `plan_deploy`, `apply_plan`
 - `map_custom_domain`, `list_custom_domains`, `delete_custom_domain`
+- `add_managed_domain`, `list_managed_domains`, `remove_managed_domain` — dynamic domain management
 - `setup_github_webhook` — auto-configure GitHub webhook (or return manual instructions)
 
 ## Docker Compose Key Details

@@ -276,6 +276,36 @@ fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "add_managed_domain",
+                "description": "Add a new managed domain to RouteRoot dynamically. Creates DNS zone, updates CoreDNS, and configures Caddy TLS + routes. No server restart needed.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "domain": { "type": "string", "description": "Domain to add (e.g. vibeyard.io)" }
+                    },
+                    "required": ["domain"]
+                }
+            },
+            {
+                "name": "list_managed_domains",
+                "description": "List all managed domains (config + dynamically added).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "remove_managed_domain",
+                "description": "Remove a dynamically added domain. Config domains cannot be removed via API.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "domain": { "type": "string", "description": "Domain to remove" }
+                    },
+                    "required": ["domain"]
+                }
+            },
+            {
                 "name": "setup_github_webhook",
                 "description": "Configure a GitHub repository webhook for auto-deploy on push. Requires a GitHub token with 'admin:repo_hook' permission. On push, branches auto-deploy; on branch delete, deployments auto-teardown. If the GitHub token is not available, returns manual setup instructions instead.",
                 "inputSchema": {
@@ -410,6 +440,21 @@ async fn call_tool(
         "delete_custom_domain" => {
             let domain = args.get("domain").and_then(|v| v.as_str()).ok_or("missing required param: domain")?;
             api_request(client, cfg, "DELETE", &format!("/api/domains/{}", domain), None).await
+        }
+
+        "add_managed_domain" => {
+            let domain = args.get("domain").and_then(|v| v.as_str()).ok_or("missing required param: domain")?;
+            let body = json!({ "domain": domain });
+            api_request(client, cfg, "POST", "/api/managed-domains", Some(body)).await
+        }
+
+        "list_managed_domains" => {
+            api_request(client, cfg, "GET", "/api/managed-domains", None).await
+        }
+
+        "remove_managed_domain" => {
+            let domain = args.get("domain").and_then(|v| v.as_str()).ok_or("missing required param: domain")?;
+            api_request(client, cfg, "DELETE", &format!("/api/managed-domains/{}", domain), None).await
         }
 
         "setup_github_webhook" => {
