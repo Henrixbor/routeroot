@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# AgentDNS Doctor — diagnose and auto-fix common issues
+# AgentDNS Doctor — diagnose and auto-fix everything
 # Usage: sudo bash scripts/doctor.sh
 
 INSTALL_DIR="${AGENTDNS_DIR:-/opt/agentdns}"
 FIXES=0
+ERRORS=0
 
 echo ""
 echo "  AgentDNS Doctor"
@@ -14,26 +15,62 @@ echo ""
 
 cd "$INSTALL_DIR" 2>/dev/null || { echo "  FAIL: $INSTALL_DIR not found. Run setup.sh first."; exit 1; }
 
+# --- Check root ---
+if [ "$(id -u)" -ne 0 ]; then
+    echo "  FAIL: Must run as root (sudo bash scripts/doctor.sh)"
+    exit 1
+fi
+
 # --- Check .env ---
 if [ ! -f .env ]; then
-    echo "  FAIL: .env missing"
+    echo "  FAIL: .env missing. Re-run setup.sh"
     exit 1
+fi
+source .env 2>/dev/null || { echo "  FAIL: .env is malformed"; exit 1; }
+echo "  OK: .env (domain=$AGENTDNS_DOMAIN, ip=$AGENTDNS_SERVER_IP)"
+
+# --- Check .env has IPv4 not IPv6 ---
+if echo "$AGENTDNS_SERVER_IP" | grep -q ":"; then
+    REAL_IP=$(curl -4 -sf --max-time 5 ifconfig.me 2>/dev/null \
+           || curl -4 -sf --max-time 5 icanhazip.com 2>/dev/null \
+           || ip -4 addr show 2>/dev/null | grep 'scope global' | grep -oP 'inet \K[\d.]+' | head -1 \
+           || echo "")
+    if [ -n "$REAL_IP" ]; then
+        echo "  FIXING: .env has IPv6 ($AGENTDNS_SERVER_IP) -> IPv4 ($REAL_IP)"
+        sed -i "s/AGENTDNS_SERVER_IP=.*/AGENTDNS_SERVER_IP=$REAL_IP/" .env
+        AGENTDNS_SERVER_IP="$REAL_IP"
+        FIXES=$((FIXES + 1))
+    else
+        echo "  ERROR: .env has IPv6 but can't detect IPv4"
+        ERRORS=$((ERRORS + 1))
+    fi
 else
-    source .env
-    echo "  OK: .env found (domain=$AGENTDNS_DOMAIN)"
+    echo "  OK: Server IP is IPv4"
 fi
 
 # --- Check port conflicts (53, 80, 443) ---
 fix_port() {
     local PORT=$1
     local PIDS
-    PIDS=$(ss -tlnp 2>/dev/null | grep ":${PORT} " | grep -v docker | grep -oP 'pid=\K[0-9]+' | sort -u)
-    if [ -z "$PIDS" ]; then
-        echo "  OK: Port $PORT available"
+    PIDS=$(ss -tlnp 2>/dev/null | grep ":${PORT} " | grep -oP 'pid=\K[0-9]+' | sort -u || true)
+    [ "$PORT" = "53" ] && PIDS="$PIDS $(ss -ulnp 2>/dev/null | grep ":${PORT} " | grep -oP 'pid=\K[0-9]+' | sort -u || true)"
+    PIDS=$(echo "$PIDS" | tr ' ' '\n' | sort -u | grep -v '^$' || true)
+
+    # Filter out Docker-managed processes
+    local NON_DOCKER_PIDS=""
+    for PID in $PIDS; do
+        if ! grep -q docker "/proc/$PID/cgroup" 2>/dev/null; then
+            NON_DOCKER_PIDS="$NON_DOCKER_PIDS $PID"
+        fi
+    done
+    NON_DOCKER_PIDS=$(echo "$NON_DOCKER_PIDS" | tr ' ' '\n' | grep -v '^$' | sort -u || true)
+
+    if [ -z "$NON_DOCKER_PIDS" ]; then
+        echo "  OK: Port $PORT"
         return
     fi
 
-    for PID in $PIDS; do
+    for PID in $NON_DOCKER_PIDS; do
         local PROC
         PROC=$(ps -p "$PID" -o comm= 2>/dev/null || echo "unknown")
         echo "  FIXING: Port $PORT used by $PROC (pid $PID)"
@@ -42,8 +79,8 @@ fix_port() {
             systemd-resolve*)
                 systemctl stop systemd-resolved 2>/dev/null || true
                 systemctl disable systemd-resolved 2>/dev/null || true
-                echo "nameserver 8.8.8.8" > /etc/resolv.conf
-                echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+                rm -f /etc/resolv.conf
+                printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > /etc/resolv.conf
                 echo "  FIXED: systemd-resolved disabled"
                 ;;
             nginx*)
@@ -61,9 +98,20 @@ fix_port() {
                 systemctl disable caddy 2>/dev/null || true
                 echo "  FIXED: system caddy stopped"
                 ;;
+            dnsmasq*)
+                systemctl stop dnsmasq 2>/dev/null || true
+                systemctl disable dnsmasq 2>/dev/null || true
+                echo "  FIXED: dnsmasq stopped"
+                ;;
+            named*|bind*)
+                systemctl stop named 2>/dev/null || systemctl stop bind9 2>/dev/null || true
+                systemctl disable named 2>/dev/null || systemctl disable bind9 2>/dev/null || true
+                echo "  FIXED: bind stopped"
+                ;;
             *)
                 kill "$PID" 2>/dev/null || true
                 sleep 1
+                kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null
                 echo "  FIXED: killed $PROC ($PID)"
                 ;;
         esac
@@ -75,9 +123,25 @@ fix_port 53
 fix_port 80
 fix_port 443
 
-# --- Check Corefile has actual domain (not env var placeholder) ---
-if grep -q '{\$AGENTDNS_DOMAIN' coredns/Corefile 2>/dev/null; then
-    echo "  FIXING: Corefile has env var placeholder (CoreDNS doesn't support this)"
+# --- Check Docker ---
+if ! command -v docker &>/dev/null; then
+    echo "  FAIL: Docker not installed"
+    exit 1
+fi
+if ! docker info &>/dev/null; then
+    echo "  FIXING: Docker daemon not running"
+    systemctl start docker
+    sleep 3
+    docker info &>/dev/null || { echo "  FAIL: Docker won't start"; exit 1; }
+    echo "  FIXED: Docker started"
+    FIXES=$((FIXES + 1))
+else
+    echo "  OK: Docker running"
+fi
+
+# --- Check Corefile ---
+if grep -q '{\$AGENTDNS_DOMAIN' coredns/Corefile 2>/dev/null || ! grep -q "$AGENTDNS_DOMAIN" coredns/Corefile 2>/dev/null; then
+    echo "  FIXING: Corefile (domain mismatch or env var placeholder)"
     cat > coredns/Corefile <<EOF
 .:53 {
     file /etc/coredns/zones/db.${AGENTDNS_DOMAIN} ${AGENTDNS_DOMAIN}
@@ -88,15 +152,15 @@ if grep -q '{\$AGENTDNS_DOMAIN' coredns/Corefile 2>/dev/null; then
     ready :8055
 }
 EOF
-    echo "  FIXED: Corefile written with domain=$AGENTDNS_DOMAIN"
+    echo "  FIXED: Corefile for $AGENTDNS_DOMAIN"
     FIXES=$((FIXES + 1))
 else
     echo "  OK: Corefile"
 fi
 
-# --- Check zone file exists ---
+# --- Check zone file ---
 if [ ! -f "coredns/zones/db.${AGENTDNS_DOMAIN}" ]; then
-    echo "  FIXING: Zone file missing for $AGENTDNS_DOMAIN"
+    echo "  FIXING: Zone file missing"
     mkdir -p coredns/zones
     cat > "coredns/zones/db.${AGENTDNS_DOMAIN}" <<EOF
 \$ORIGIN ${AGENTDNS_DOMAIN}.
@@ -123,41 +187,15 @@ EOF
     echo "  FIXED: Zone file created"
     FIXES=$((FIXES + 1))
 else
-    echo "  OK: Zone file exists"
-fi
-
-# --- Check zone file has IPv4 not IPv6 ---
-if grep -q "IN A.*:" "coredns/zones/db.${AGENTDNS_DOMAIN}" 2>/dev/null; then
-    echo "  FIXING: Zone file has IPv6 in A records (need AAAA for IPv6)"
-    sed -i "s/IN A.*/IN A    ${AGENTDNS_SERVER_IP}/g" "coredns/zones/db.${AGENTDNS_DOMAIN}"
-    echo "  FIXED: Zone file updated with IPv4 $AGENTDNS_SERVER_IP"
-    FIXES=$((FIXES + 1))
-else
-    echo "  OK: Zone file IPs"
-fi
-
-# --- Check .env has IPv4 not IPv6 ---
-if echo "$AGENTDNS_SERVER_IP" | grep -q ":"; then
-    REAL_IP=$(curl -4 -sf --max-time 5 ifconfig.me 2>/dev/null || ip -4 addr show eth0 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1 || echo "")
-    if [ -n "$REAL_IP" ]; then
-        echo "  FIXING: .env has IPv6 ($AGENTDNS_SERVER_IP), switching to IPv4 ($REAL_IP)"
-        sed -i "s/AGENTDNS_SERVER_IP=.*/AGENTDNS_SERVER_IP=$REAL_IP/" .env
-        sed -i "s/$AGENTDNS_SERVER_IP/$REAL_IP/g" "coredns/zones/db.${AGENTDNS_DOMAIN}"
-        echo "  FIXED: Updated to $REAL_IP"
+    # Check zone file has correct IP
+    if grep -q "IN A.*:" "coredns/zones/db.${AGENTDNS_DOMAIN}" 2>/dev/null; then
+        echo "  FIXING: Zone file has IPv6 in A records"
+        sed -i "s/IN A    .*/IN A    ${AGENTDNS_SERVER_IP}/g" "coredns/zones/db.${AGENTDNS_DOMAIN}"
+        echo "  FIXED: Zone IPs updated"
         FIXES=$((FIXES + 1))
     else
-        echo "  WARN: .env has IPv6 but could not detect IPv4"
+        echo "  OK: Zone file"
     fi
-else
-    echo "  OK: Server IP is IPv4"
-fi
-
-# --- Check Docker ---
-if ! command -v docker &>/dev/null; then
-    echo "  FAIL: Docker not installed"
-    exit 1
-else
-    echo "  OK: Docker installed"
 fi
 
 # --- Check data dir ---
@@ -172,23 +210,39 @@ fi
 # --- Check disk space ---
 DISK_USAGE=$(df / --output=pcent 2>/dev/null | tail -1 | tr -d ' %' || echo "0")
 if [ "$DISK_USAGE" -gt 90 ]; then
-    echo "  WARN: Disk usage at ${DISK_USAGE}% — consider freeing space"
-    echo "        docker system prune -a  (removes unused images)"
+    echo "  WARN: Disk at ${DISK_USAGE}%"
+    echo "  Cleaning up..."
+    docker system prune -f 2>/dev/null || true
+    apt-get clean 2>/dev/null || true
+    DISK_USAGE=$(df / --output=pcent 2>/dev/null | tail -1 | tr -d ' %' || echo "0")
+    echo "  Now at ${DISK_USAGE}%"
+    FIXES=$((FIXES + 1))
 else
-    echo "  OK: Disk space (${DISK_USAGE}% used)"
+    echo "  OK: Disk (${DISK_USAGE}%)"
 fi
 
-# --- Restart services if fixes were applied ---
-if [ "$FIXES" -gt 0 ]; then
+# --- Check container status ---
+echo ""
+RUNNING=$(docker compose ps --status running -q 2>/dev/null | wc -l || echo "0")
+TOTAL=$(docker compose ps -q 2>/dev/null | wc -l || echo "0")
+echo "  Containers: $RUNNING/$TOTAL running"
+
+if [ "$RUNNING" -lt 3 ] || [ "$FIXES" -gt 0 ]; then
     echo ""
-    echo "  Applied $FIXES fix(es). Restarting services..."
+    if [ "$FIXES" -gt 0 ]; then
+        echo "  Applied $FIXES fix(es). Restarting..."
+    else
+        echo "  Not all containers running. Restarting..."
+    fi
     docker compose down 2>/dev/null || true
-    docker compose up -d
+    docker compose up -d 2>&1
     echo ""
     echo "  Waiting for health..."
-    for i in $(seq 1 20); do
+    for i in $(seq 1 30); do
         if curl -sf http://localhost:8053/api/health >/dev/null 2>&1; then
+            echo ""
             echo "  OK: AgentDNS is healthy!"
+            curl -sf http://localhost:8053/api/health 2>/dev/null | python3 -m json.tool 2>/dev/null || curl -sf http://localhost:8053/api/health
             echo ""
             exit 0
         fi
@@ -196,16 +250,22 @@ if [ "$FIXES" -gt 0 ]; then
         sleep 3
     done
     echo ""
-    echo "  WARN: API not responding yet. Check: docker compose logs -f"
+    echo "  WARN: API still not responding."
+    echo "  Logs: docker compose logs --tail 20"
+    exit 1
 else
-    # Just check health
     echo ""
     HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:8053/api/health 2>/dev/null || echo "000")
     if [ "$HTTP_CODE" = "200" ]; then
-        echo "  OK: API healthy (HTTP 200)"
+        echo "  OK: API healthy"
+        curl -sf http://localhost:8053/api/health 2>/dev/null | python3 -m json.tool 2>/dev/null || curl -sf http://localhost:8053/api/health
     else
         echo "  WARN: API not responding (HTTP $HTTP_CODE)"
-        echo "        Try: docker compose up -d"
+        echo "  Restarting..."
+        docker compose down 2>/dev/null || true
+        docker compose up -d
+        sleep 5
+        curl -sf http://localhost:8053/api/health 2>/dev/null || echo "  Still not up. Check: docker compose logs -f"
     fi
 fi
 
