@@ -5,7 +5,7 @@
     admin :2019
 }
 
-# Root domain — serves the dashboard
+# Root domain — serves the API/dashboard
 {$ROUTEROOT_DOMAIN:routeroot.dev} {
     reverse_proxy agent-api:8053
 }
@@ -13,14 +13,4 @@
 # API subdomain
 api.{$ROUTEROOT_DOMAIN:routeroot.dev} {
     reverse_proxy agent-api:8053
-}
-
-# All other subdomains — on-demand TLS + dynamic routing via Caddy API
-*.{$ROUTEROOT_DOMAIN:routeroot.dev} {
-    tls {
-        on_demand
-    }
-    # Default: Caddy API routes are injected dynamically by agent-api
-    # This block is a fallback for subdomains without a registered route
-    respond "Deployment not found. Deploy with: routeroot deploy <repo>" 404
 }
