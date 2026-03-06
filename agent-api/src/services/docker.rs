@@ -30,7 +30,7 @@ impl DockerService {
         port_bindings.insert(
             format!("{container_port}/tcp"),
             Some(vec![PortBinding {
-                host_ip: Some("127.0.0.1".into()),
+                host_ip: Some("0.0.0.0".into()),
                 host_port: Some(port.to_string()),
             }]),
         );
