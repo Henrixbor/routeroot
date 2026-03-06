@@ -47,6 +47,15 @@ pub struct DeployPlan {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomDomain {
+    pub id: String,
+    pub domain: String,
+    pub deployment_name: String,
+    pub verified: bool,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditEvent {
     pub id: String,
@@ -115,9 +124,19 @@ impl Database {
                 details TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS custom_domains (
+                id TEXT PRIMARY KEY,
+                domain TEXT UNIQUE NOT NULL,
+                deployment_name TEXT NOT NULL,
+                verified INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (deployment_name) REFERENCES deployments(name)
+            );
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_deployments_status ON deployments(status);
-            CREATE INDEX IF NOT EXISTS idx_plans_status ON deploy_plans(status);"
+            CREATE INDEX IF NOT EXISTS idx_plans_status ON deploy_plans(status);
+            CREATE INDEX IF NOT EXISTS idx_custom_domains_domain ON custom_domains(domain);
+            CREATE INDEX IF NOT EXISTS idx_custom_domains_deployment ON custom_domains(deployment_name);"
         )?;
         Ok(())
     }
@@ -320,6 +339,84 @@ impl Database {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| AppError::Internal(e.to_string()))
+    }
+
+    // --- Custom Domains ---
+
+    pub fn insert_custom_domain(&self, d: &CustomDomain) -> Result<(), AppError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO custom_domains (id, domain, deployment_name, verified, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![d.id, d.domain, d.deployment_name, d.verified, d.created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_custom_domain(&self, domain: &str) -> Result<Option<CustomDomain>, AppError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, domain, deployment_name, verified, created_at FROM custom_domains WHERE domain = ?1"
+        )?;
+        let mut rows = stmt.query_map(params![domain], |row| {
+            Ok(CustomDomain {
+                id: row.get(0)?,
+                domain: row.get(1)?,
+                deployment_name: row.get(2)?,
+                verified: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn list_custom_domains(&self) -> Result<Vec<CustomDomain>, AppError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, domain, deployment_name, verified, created_at FROM custom_domains ORDER BY created_at DESC"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(CustomDomain {
+                id: row.get(0)?,
+                domain: row.get(1)?,
+                deployment_name: row.get(2)?,
+                verified: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| AppError::Internal(e.to_string()))
+    }
+
+    pub fn list_custom_domains_for_deployment(&self, deployment_name: &str) -> Result<Vec<CustomDomain>, AppError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, domain, deployment_name, verified, created_at FROM custom_domains WHERE deployment_name = ?1"
+        )?;
+        let rows = stmt.query_map(params![deployment_name], |row| {
+            Ok(CustomDomain {
+                id: row.get(0)?,
+                domain: row.get(1)?,
+                deployment_name: row.get(2)?,
+                verified: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| AppError::Internal(e.to_string()))
+    }
+
+    pub fn delete_custom_domain(&self, domain: &str) -> Result<(), AppError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM custom_domains WHERE domain = ?1", params![domain])?;
+        Ok(())
+    }
+
+    pub fn is_custom_domain(&self, domain: &str) -> Result<bool, AppError> {
+        let conn = self.conn.lock().unwrap();
+        let count: usize = conn.query_row(
+            "SELECT COUNT(*) FROM custom_domains WHERE domain = ?1",
+            params![domain],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
     }
 
     // --- Audit Log ---

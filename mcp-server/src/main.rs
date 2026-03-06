@@ -107,14 +107,15 @@ fn tool_definitions() -> Value {
         "tools": [
             {
                 "name": "deploy_preview",
-                "description": "Deploy a git repo branch as a live preview URL via AgentDNS.",
+                "description": "Deploy a git repo branch as a live preview URL. By default creates a subdomain (repo-branch.routeroot.dev). Optionally use path_prefix for path-based routing (routeroot.dev/prefix).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "repo": { "type": "string", "description": "Git repository URL (e.g. https://github.com/user/repo)" },
                         "branch": { "type": "string", "description": "Branch to deploy (default: main)" },
                         "name": { "type": "string", "description": "Optional deployment name" },
-                        "ttl": { "type": "string", "description": "Time to live, e.g. '24h'" }
+                        "ttl": { "type": "string", "description": "Time to live, e.g. '24h'" },
+                        "path_prefix": { "type": "string", "description": "Optional: deploy at routeroot.dev/prefix instead of subdomain" }
                     },
                     "required": ["repo"]
                 }
@@ -236,6 +237,37 @@ fn tool_definitions() -> Value {
                     },
                     "required": ["plan_id"]
                 }
+            },
+            {
+                "name": "map_custom_domain",
+                "description": "Map a custom domain (e.g. client.com) to an existing deployment. The domain owner must add a CNAME record pointing to the deployment subdomain.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "domain": { "type": "string", "description": "Custom domain to map (e.g. app.client.com)" },
+                        "deployment_name": { "type": "string", "description": "Name of the deployment to route to" }
+                    },
+                    "required": ["domain", "deployment_name"]
+                }
+            },
+            {
+                "name": "list_custom_domains",
+                "description": "List all custom domain mappings.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "delete_custom_domain",
+                "description": "Remove a custom domain mapping.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "domain": { "type": "string", "description": "Custom domain to remove" }
+                    },
+                    "required": ["domain"]
+                }
             }
         ]
     })
@@ -263,6 +295,9 @@ async fn call_tool(
             }
             if let Some(t) = args.get("ttl").and_then(|v| v.as_str()) {
                 body["ttl"] = json!(t);
+            }
+            if let Some(p) = args.get("path_prefix").and_then(|v| v.as_str()) {
+                body["path_prefix"] = json!(p);
             }
             api_request(client, cfg, "POST", "/api/deploy", Some(body)).await
         }
@@ -336,6 +371,25 @@ async fn call_tool(
         "apply_plan" => {
             let plan_id = args.get("plan_id").and_then(|v| v.as_str()).ok_or("missing required param: plan_id")?;
             api_request(client, cfg, "POST", &format!("/api/plan/{}/apply", plan_id), None).await
+        }
+
+        "map_custom_domain" => {
+            let domain = args.get("domain").and_then(|v| v.as_str()).ok_or("missing required param: domain")?;
+            let deployment_name = args.get("deployment_name").and_then(|v| v.as_str()).ok_or("missing required param: deployment_name")?;
+            let body = json!({
+                "domain": domain,
+                "deployment_name": deployment_name
+            });
+            api_request(client, cfg, "POST", "/api/domains", Some(body)).await
+        }
+
+        "list_custom_domains" => {
+            api_request(client, cfg, "GET", "/api/domains", None).await
+        }
+
+        "delete_custom_domain" => {
+            let domain = args.get("domain").and_then(|v| v.as_str()).ok_or("missing required param: domain")?;
+            api_request(client, cfg, "DELETE", &format!("/api/domains/{}", domain), None).await
         }
 
         _ => Err(format!("unknown tool: {}", name)),

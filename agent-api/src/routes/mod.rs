@@ -1,4 +1,5 @@
 pub mod deploy;
+pub mod domains;
 pub mod health;
 pub mod records;
 pub mod webhook;
@@ -31,6 +32,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/records", post(records::create_record))
         .route("/records", get(records::list_records))
         .route("/records/{name}", delete(records::delete_record))
+        // Custom Domains
+        .route("/domains", post(domains::map_custom_domain))
+        .route("/domains", get(domains::list_custom_domains))
+        .route("/domains/{domain}", delete(domains::delete_custom_domain))
         // Audit
         .route("/audit", get(deploy::list_audit))
         // Webhooks

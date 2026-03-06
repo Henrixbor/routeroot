@@ -51,9 +51,20 @@ pub async fn tls_check(
         return axum::http::StatusCode::BAD_REQUEST;
     };
 
+    // Allow subdomains of our domain
     if domain.ends_with(&format!(".{}", state.config.domain)) {
-        axum::http::StatusCode::OK
-    } else {
-        axum::http::StatusCode::NOT_FOUND
+        return axum::http::StatusCode::OK;
     }
+
+    // Allow the root domain itself
+    if domain == state.config.domain {
+        return axum::http::StatusCode::OK;
+    }
+
+    // Allow custom domains mapped to deployments
+    if state.db.is_custom_domain(&domain).unwrap_or(false) {
+        return axum::http::StatusCode::OK;
+    }
+
+    axum::http::StatusCode::NOT_FOUND
 }

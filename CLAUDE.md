@@ -47,6 +47,11 @@ POST /api/records              Create record (NS/SOA/CAA blocked)
 GET  /api/records              List records
 DEL  /api/records/{name}       Delete record
 
+# Custom Domains
+POST /api/domains              Map custom domain to deployment
+GET  /api/domains              List custom domain mappings
+DEL  /api/domains/{domain}     Remove custom domain mapping
+
 # Audit
 GET  /api/audit                View audit log
 
@@ -86,9 +91,12 @@ Add to your Claude Code MCP config (`~/.claude/mcp.json`):
 }
 ```
 
-MCP Tools available: `deploy_preview`, `list_deployments`, `get_deployment`,
-`teardown`, `get_logs`, `create_dns_record`, `list_dns_records`,
-`delete_dns_record`, `health`, `promote`, `plan_deploy`, `apply_plan`
+MCP Tools available (15):
+- `deploy_preview` — deploy a branch (subdomain or path-based)
+- `list_deployments`, `get_deployment`, `teardown`, `get_logs`
+- `create_dns_record`, `list_dns_records`, `delete_dns_record`
+- `health`, `promote`, `plan_deploy`, `apply_plan`
+- `map_custom_domain`, `list_custom_domains`, `delete_custom_domain`
 
 ## Project Layout
 - `agent-api/` — Rust Axum HTTP service (the brain)

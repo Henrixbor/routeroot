@@ -11,6 +11,7 @@ pub struct CreateDeployRequest {
     pub name: Option<String>,
     pub ttl: Option<String>,
     pub environment: Option<String>,
+    pub path_prefix: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -100,6 +101,7 @@ pub async fn apply_plan(
         name: Some(plan.name),
         ttl: plan.ttl,
         environment: Some(plan.environment),
+        path_prefix: None,
     };
 
     audit(&state, "plan_applied", "plan", &plan_id, &serde_json::json!({}));
@@ -137,7 +139,11 @@ pub async fn create_deployment(
         return Err(AppError::Conflict(format!("deployment '{name}' already exists")));
     }
 
-    let url = format!("https://{}.{}", name, state.config.domain);
+    let url = if let Some(ref prefix) = req.path_prefix {
+        format!("https://{}/{}", state.config.domain, prefix)
+    } else {
+        format!("https://{}.{}", name, state.config.domain)
+    };
     let ttl_secs = req.ttl.as_deref().map(parse_ttl).unwrap_or(state.config.default_ttl_secs);
     let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs as i64);
 
@@ -175,9 +181,10 @@ pub async fn create_deployment(
     let name_clone = name.clone();
     let repo_clone = req.repo.clone();
     let branch_clone = branch.clone();
+    let path_prefix_clone = req.path_prefix.clone();
 
     tokio::spawn(async move {
-        match do_build_and_deploy(&state_clone, &name_clone, &repo_clone, &branch_clone).await {
+        match do_build_and_deploy(&state_clone, &name_clone, &repo_clone, &branch_clone, path_prefix_clone.as_deref()).await {
             Ok(_) => {
                 tracing::info!("deployment '{name_clone}' is live, starting verification");
                 audit(&state_clone, "deploy_live", "deployment", &name_clone, &serde_json::json!({}));
@@ -205,6 +212,7 @@ async fn do_build_and_deploy(
     name: &str,
     repo: &str,
     branch: &str,
+    path_prefix: Option<&str>,
 ) -> Result<(), AppError> {
     tracing::info!(name = %name, phase = "clone_build", "starting clone and build");
     let (image_tag, container_port) = builder::clone_and_build(repo, branch, name).await?;
@@ -221,7 +229,12 @@ async fn do_build_and_deploy(
     ).await?;
 
     tracing::info!(name = %name, phase = "proxy", "registering proxy route");
+    // Register both subdomain route and optional path route
     state.proxy.add_route(name, &state.config.domain, port).await?;
+    if let Some(prefix) = path_prefix {
+        state.proxy.add_path_route(prefix, &state.config.domain, port).await?;
+        tracing::info!(name = %name, path_prefix = %prefix, "path route registered");
+    }
     state.db.update_deployment_status(name, "running", Some(&container_id), Some(port))?;
 
     tracing::info!(name = %name, phase = "complete", container_id = %container_id, host_port = port, "deployment live");

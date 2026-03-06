@@ -48,6 +48,107 @@ impl ProxyService {
         Ok(())
     }
 
+    /// Register a custom domain route: customdomain.com → localhost:port
+    pub async fn add_custom_domain_route(&self, custom_domain: &str, target_port: u16) -> Result<(), AppError> {
+        let route_id = format!("agentdns-custom-{}", custom_domain.replace('.', "-"));
+
+        let route = json!({
+            "@id": route_id,
+            "match": [{ "host": [custom_domain] }],
+            "handle": [{
+                "handler": "reverse_proxy",
+                "upstreams": [{ "dial": format!("host.docker.internal:{target_port}") }]
+            }]
+        });
+
+        let url = format!("{}/config/apps/http/servers/srv0/routes", self.admin_url);
+
+        let resp = self.client
+            .post(&url)
+            .json(&route)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!("caddy custom domain route failed: {body}")));
+        }
+
+        tracing::info!("Added Caddy custom domain route: {custom_domain} → localhost:{target_port}");
+        Ok(())
+    }
+
+    /// Remove a custom domain route
+    pub async fn remove_custom_domain_route(&self, custom_domain: &str) -> Result<(), AppError> {
+        let route_id = format!("agentdns-custom-{}", custom_domain.replace('.', "-"));
+        let url = format!("{}/id/{route_id}", self.admin_url);
+
+        self.client
+            .delete(&url)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
+
+        tracing::info!("Removed Caddy custom domain route: {custom_domain}");
+        Ok(())
+    }
+
+    /// Register a path-based route: domain/path/* → localhost:port
+    pub async fn add_path_route(&self, path_prefix: &str, domain: &str, target_port: u16) -> Result<(), AppError> {
+        let route_id = format!("agentdns-path-{}", path_prefix.replace('/', "-"));
+
+        let route = json!({
+            "@id": route_id,
+            "match": [{
+                "host": [domain],
+                "path": [format!("/{}/*", path_prefix)]
+            }],
+            "handle": [
+                {
+                    "handler": "rewrite",
+                    "strip_path_prefix": format!("/{}", path_prefix)
+                },
+                {
+                    "handler": "reverse_proxy",
+                    "upstreams": [{ "dial": format!("host.docker.internal:{target_port}") }]
+                }
+            ]
+        });
+
+        let url = format!("{}/config/apps/http/servers/srv0/routes", self.admin_url);
+
+        let resp = self.client
+            .post(&url)
+            .json(&route)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!("caddy path route failed: {body}")));
+        }
+
+        tracing::info!("Added Caddy path route: {domain}/{path_prefix} → localhost:{target_port}");
+        Ok(())
+    }
+
+    /// Remove a path-based route
+    pub async fn remove_path_route(&self, path_prefix: &str) -> Result<(), AppError> {
+        let route_id = format!("agentdns-path-{}", path_prefix.replace('/', "-"));
+        let url = format!("{}/id/{route_id}", self.admin_url);
+
+        self.client
+            .delete(&url)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
+
+        tracing::info!("Removed Caddy path route: {path_prefix}");
+        Ok(())
+    }
+
     /// Remove a route by subdomain
     pub async fn remove_route(&self, subdomain: &str) -> Result<(), AppError> {
         let route_id = format!("agentdns-{subdomain}");

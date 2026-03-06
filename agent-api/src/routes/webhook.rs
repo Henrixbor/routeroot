@@ -77,6 +77,7 @@ pub async fn github_webhook(
         name: Some(name.clone()),
         ttl: None,
         environment: Some("preview".into()),
+        path_prefix: None,
     };
 
     let result = super::deploy::create_deployment(State(state), Json(req)).await?;
