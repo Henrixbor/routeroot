@@ -8,8 +8,8 @@ services:
     volumes:
       - ./coredns/Corefile:/etc/coredns/Corefile:ro
       - ./coredns/zones:/etc/coredns/zones
-    environment:
-      - ROUTEROOT_DOMAIN=${ROUTEROOT_DOMAIN:-routeroot.dev}
+    networks:
+      - internal
     restart: always
 
   caddy:
@@ -17,6 +17,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      # Caddy admin API NOT exposed to host — only accessible within internal network
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -25,18 +26,21 @@ services:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     environment:
       - ROUTEROOT_DOMAIN=${ROUTEROOT_DOMAIN:-routeroot.dev}
+    networks:
+      - internal
     restart: always
 
   agent-api:
     build: ./agent-api
     ports:
-      - "8053:8053"
+      - "127.0.0.1:8053:8053"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./coredns/zones:/dns-zones
       - ./data:/data
     environment:
       - ROUTEROOT_DOMAIN=${ROUTEROOT_DOMAIN:-routeroot.dev}
+      - ROUTEROOT_DOMAINS=${ROUTEROOT_DOMAINS:-${ROUTEROOT_DOMAIN:-routeroot.dev}}
       - ROUTEROOT_SERVER_IP=${ROUTEROOT_SERVER_IP}
       - ROUTEROOT_API_KEY=${ROUTEROOT_API_KEY}
       - ROUTEROOT_MAX_DEPLOYMENTS=${ROUTEROOT_MAX_DEPLOYMENTS:-20}
@@ -45,12 +49,15 @@ services:
       - ROUTEROOT_MAX_CPUS=${ROUTEROOT_MAX_CPUS:-2}
       - ROUTEROOT_CADDY_ADMIN=http://caddy:2019
       - ROUTEROOT_GITHUB_WEBHOOK_SECRET=${ROUTEROOT_GITHUB_WEBHOOK_SECRET:-}
+      - ROUTEROOT_ALLOWED_REPO_HOSTS=${ROUTEROOT_ALLOWED_REPO_HOSTS:-github.com,gitlab.com,bitbucket.org}
       - ROUTEROOT_LOG_FORMAT=${ROUTEROOT_LOG_FORMAT:-human}
       - DATABASE_PATH=/data/routeroot.db
-      - ZONE_FILE_PATH=/dns-zones/db.${ROUTEROOT_DOMAIN:-routeroot.dev}
+      - ZONE_FILE_DIR=/dns-zones
     depends_on:
       - coredns
       - caddy
+    networks:
+      - internal
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8053/api/health"]
       interval: 15s
@@ -58,6 +65,10 @@ services:
       retries: 3
       start_period: 30s
     restart: always
+
+networks:
+  internal:
+    driver: bridge
 
 volumes:
   caddy_data:

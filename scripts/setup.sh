@@ -35,6 +35,7 @@ fi
 DOMAIN="${1:-}"
 SERVER_IP="${2:-}"
 API_KEY="${3:-}"
+EXTRA_DOMAINS="${4:-}"
 INTERACTIVE=false
 
 # --- Detect IPv4 (force -4, multiple fallbacks) ---
@@ -261,8 +262,16 @@ fi
 echo "[5/7] Writing config..."
 mkdir -p data coredns/zones
 
+# Build comma-separated domains list
+if [ -n "$EXTRA_DOMAINS" ]; then
+    ALL_DOMAINS="${DOMAIN},${EXTRA_DOMAINS}"
+else
+    ALL_DOMAINS="${DOMAIN}"
+fi
+
 cat > .env <<EOF
 ROUTEROOT_DOMAIN=$DOMAIN
+ROUTEROOT_DOMAINS=$ALL_DOMAINS
 ROUTEROOT_SERVER_IP=$SERVER_IP
 ROUTEROOT_API_KEY=$API_KEY
 ROUTEROOT_MAX_DEPLOYMENTS=20
@@ -270,25 +279,41 @@ ROUTEROOT_DEFAULT_TTL=48h
 ROUTEROOT_MAX_MEMORY=2048
 ROUTEROOT_MAX_CPUS=2
 ROUTEROOT_LOG_FORMAT=json
+ROUTEROOT_ALLOWED_REPO_HOSTS=github.com,gitlab.com,bitbucket.org
 EOF
 
 # Corefile — must have actual domain, CoreDNS doesn't do env var substitution
-cat > coredns/Corefile <<EOF
+# Generate file blocks for each domain
+COREFILE_BLOCKS=""
+IFS=',' read -ra DOMAIN_LIST <<< "$ALL_DOMAINS"
+for D in "${DOMAIN_LIST[@]}"; do
+    D=$(echo "$D" | tr -d ' ')
+    [ -z "$D" ] && continue
+    COREFILE_BLOCKS="${COREFILE_BLOCKS}
 .:53 {
-    file /etc/coredns/zones/db.${DOMAIN} ${DOMAIN}
+    file /etc/coredns/zones/db.${D} ${D}
     reload 5s
     log
     errors
     health :8054
     ready :8055
 }
+"
+done
+
+cat > coredns/Corefile <<EOF
+${COREFILE_BLOCKS}
 EOF
 
-cat > "coredns/zones/db.$DOMAIN" <<EOF
-\$ORIGIN ${DOMAIN}.
+# Generate zone files for each domain
+for D in "${DOMAIN_LIST[@]}"; do
+    D=$(echo "$D" | tr -d ' ')
+    [ -z "$D" ] && continue
+    cat > "coredns/zones/db.$D" <<ZONEFILE
+\$ORIGIN ${D}.
 \$TTL 300
 
-@       IN SOA  ns1.${DOMAIN}. admin.${DOMAIN}. (
+@       IN SOA  ns1.${D}. admin.${D}. (
                 $(date +%Y%m%d%H)  ; serial
                 3600        ; refresh
                 900         ; retry
@@ -296,8 +321,8 @@ cat > "coredns/zones/db.$DOMAIN" <<EOF
                 300         ; minimum TTL
 )
 
-@       IN NS   ns1.${DOMAIN}.
-@       IN NS   ns2.${DOMAIN}.
+@       IN NS   ns1.${D}.
+@       IN NS   ns2.${D}.
 
 ns1     IN A    ${SERVER_IP}
 ns2     IN A    ${SERVER_IP}
@@ -305,7 +330,9 @@ ns2     IN A    ${SERVER_IP}
 @       IN A    ${SERVER_IP}
 
 *       IN A    ${SERVER_IP}
-EOF
+ZONEFILE
+    echo "  Zone file created for $D"
+done
 
 # Save API key to file for easy retrieval
 echo "$API_KEY" > "$INSTALL_DIR/.api-key"
@@ -320,7 +347,7 @@ if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "active"; then
     ufw allow 53/tcp >/dev/null
     ufw allow 80/tcp >/dev/null
     ufw allow 443/tcp >/dev/null
-    ufw allow 8053/tcp >/dev/null
+    # Port 8053 NOT opened — API accessed via Caddy at api.domain (HTTPS)
 else
     echo "[6/7] Firewall (skipped)"
 fi
@@ -457,12 +484,13 @@ for i in $(seq 1 30); do
         echo "  ╚═══════════════════════════════════════════════════╝"
         echo ""
         echo "  Domain:     $DOMAIN"
-        echo "  API:        http://$SERVER_IP:8053"
+        echo "  API:        https://api.$DOMAIN  (external)"
+        echo "  API local:  http://localhost:8053  (server only)"
         echo "  API Key:    $API_KEY"
         echo "  Key file:   $INSTALL_DIR/.api-key"
         echo ""
         echo "  ── Quick Commands ──────────────────────────────────"
-        echo "  Test:       curl http://$SERVER_IP:8053/api/health"
+        echo "  Test:       curl https://api.$DOMAIN/api/health"
         echo "  Logs:       cd $INSTALL_DIR && docker compose logs -f"
         echo "  Doctor:     cd $INSTALL_DIR && sudo bash scripts/doctor.sh"
         echo "  Update:     cd $INSTALL_DIR && sudo bash scripts/update.sh"
@@ -488,7 +516,7 @@ for i in $(seq 1 30); do
         echo "        \"routeroot\": {"
         echo "          \"command\": \"routeroot-mcp\","
         echo "          \"env\": {"
-        echo "            \"ROUTEROOT_URL\": \"http://$SERVER_IP:8053\","
+        echo "            \"ROUTEROOT_URL\": \"https://api.$DOMAIN\","
         echo "            \"ROUTEROOT_API_KEY\": \"$API_KEY\""
         echo "          }"
         echo "        }"
@@ -501,7 +529,7 @@ for i in $(seq 1 30); do
         echo ""
         echo "  ── CLI ────────────────────────────────────────────"
         echo "  cargo install --path cli"
-        echo "  export ROUTEROOT_URL=http://$SERVER_IP:8053"
+        echo "  export ROUTEROOT_URL=https://api.$DOMAIN"
         echo "  export ROUTEROOT_API_KEY=$API_KEY"
         echo "  routeroot deploy https://github.com/user/repo"
         echo "  routeroot ls"

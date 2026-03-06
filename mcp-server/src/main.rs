@@ -51,10 +51,16 @@ struct Config {
 
 impl Config {
     fn from_env() -> Self {
-        Self {
-            api_url: env::var("ROUTEROOT_URL").unwrap_or_else(|_| "http://localhost:8053".into()),
-            api_key: env::var("ROUTEROOT_API_KEY").unwrap_or_else(|_| "dev-key".into()),
+        let api_key = env::var("ROUTEROOT_API_KEY").unwrap_or_default();
+        if api_key.is_empty() {
+            eprintln!("[routeroot-mcp] ERROR: ROUTEROOT_API_KEY environment variable is required");
+            std::process::exit(1);
         }
+        let api_url = env::var("ROUTEROOT_URL").unwrap_or_else(|_| {
+            eprintln!("[routeroot-mcp] WARN: ROUTEROOT_URL not set, using http://localhost:8053");
+            "http://localhost:8053".into()
+        });
+        Self { api_url, api_key }
     }
 }
 

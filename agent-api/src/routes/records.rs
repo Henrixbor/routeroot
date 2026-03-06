@@ -34,6 +34,35 @@ pub async fn create_record(
         )));
     }
 
+    // Validate record name format
+    if !req.name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '.' || c == '_' || c == '*') {
+        return Err(AppError::BadRequest(
+            "invalid record name: only alphanumeric, hyphens, dots, underscores, and * allowed".into()
+        ));
+    }
+    if req.name.len() > 253 {
+        return Err(AppError::BadRequest("record name too long (max 253 chars)".into()));
+    }
+
+    // Validate record value — no zone file injection characters
+    if req.value.contains('\n') || req.value.contains('\r') || req.value.contains(';')
+        || req.value.contains('(') || req.value.contains(')') {
+        return Err(AppError::BadRequest(
+            "invalid record value: contains forbidden characters".into()
+        ));
+    }
+    if req.value.len() > 4096 {
+        return Err(AppError::BadRequest("record value too long (max 4096 chars)".into()));
+    }
+
+    // Validate record type
+    let valid_types = ["A", "AAAA", "CNAME", "MX", "TXT", "SRV", "PTR"];
+    if !valid_types.iter().any(|t| t.eq_ignore_ascii_case(&record_type)) {
+        return Err(AppError::BadRequest(format!(
+            "unsupported record type '{record_type}'. Allowed: {}", valid_types.join(", ")
+        )));
+    }
+
     let record = DnsRecord {
         id: uuid::Uuid::new_v4().to_string(),
         name: req.name,

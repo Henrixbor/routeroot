@@ -170,10 +170,40 @@ impl ProxyService {
     }
 
     /// Replace Caddy's entire config with a clean JSON config.
-    /// This avoids the ordering/terminal issues with Caddyfile-generated routes.
-    pub async fn init_caddy_config(&self, domain: &str, tls_check_url: &str) -> Result<(), AppError> {
-        let wildcard = format!("*.{domain}");
-        let api_host = format!("api.{domain}");
+    /// Supports multiple domains — each gets api.domain + root domain routes + wildcard TLS.
+    pub async fn init_caddy_config(&self, domains: &[String], tls_check_url: &str) -> Result<(), AppError> {
+        // Build TLS policies for all domain wildcards
+        let policies: Vec<serde_json::Value> = domains.iter().map(|domain| {
+            json!({
+                "subjects": [format!("*.{domain}")],
+                "issuers": [{ "module": "acme" }],
+                "on_demand": true
+            })
+        }).collect();
+
+        // Build routes: api.domain + root domain for each domain
+        let mut routes: Vec<serde_json::Value> = Vec::new();
+        for domain in domains {
+            let api_host = format!("api.{domain}");
+            routes.push(json!({
+                "match": [{ "host": [&api_host] }],
+                "handle": [{
+                    "handler": "reverse_proxy",
+                    "upstreams": [{ "dial": "agent-api:8053" }]
+                }],
+                "terminal": true
+            }));
+        }
+        for domain in domains {
+            routes.push(json!({
+                "match": [{ "host": [domain] }],
+                "handle": [{
+                    "handler": "reverse_proxy",
+                    "upstreams": [{ "dial": "agent-api:8053" }]
+                }]
+                // NOT terminal — path routes appended later take priority
+            }));
+        }
 
         let config = json!({
             "admin": { "listen": ":2019" },
@@ -186,37 +216,14 @@ impl ProxyService {
                                 "endpoint": tls_check_url
                             }
                         },
-                        "policies": [{
-                            "subjects": [wildcard],
-                            "issuers": [{
-                                "module": "acme"
-                            }],
-                            "on_demand": true
-                        }]
+                        "policies": policies
                     }
                 },
                 "http": {
                     "servers": {
                         "srv0": {
                             "listen": [":443", ":80"],
-                            "routes": [
-                                {
-                                    "match": [{ "host": [&api_host] }],
-                                    "handle": [{
-                                        "handler": "reverse_proxy",
-                                        "upstreams": [{ "dial": "agent-api:8053" }]
-                                    }],
-                                    "terminal": true
-                                },
-                                {
-                                    "match": [{ "host": [domain] }],
-                                    "handle": [{
-                                        "handler": "reverse_proxy",
-                                        "upstreams": [{ "dial": "agent-api:8053" }]
-                                    }]
-                                    // NOT terminal — path routes appended later take priority
-                                }
-                            ]
+                            "routes": routes
                         }
                     }
                 }
@@ -235,7 +242,7 @@ impl ProxyService {
             return Err(AppError::Internal(format!("caddy config load failed: {body}")));
         }
 
-        tracing::info!("Initialized Caddy config via JSON API for domain {domain}");
+        tracing::info!("Initialized Caddy config via JSON API for domains {:?}", domains);
         Ok(())
     }
 

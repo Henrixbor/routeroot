@@ -2,9 +2,44 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use crate::error::AppError;
 
+/// Validate that a repo URL is safe to clone.
+pub fn validate_repo_url(repo: &str, allowed_hosts: &[String]) -> Result<(), AppError> {
+    // Only allow HTTPS to prevent local file access and SSRF
+    if !repo.starts_with("https://") {
+        return Err(AppError::BadRequest(
+            "only HTTPS repository URLs are allowed (e.g. https://github.com/user/repo)".into()
+        ));
+    }
+
+    // Block suspicious URL patterns
+    if repo.contains("..") || repo.contains('\0') || repo.contains('@') {
+        return Err(AppError::BadRequest("invalid repository URL".into()));
+    }
+
+    // Validate against allowed hosts
+    if !allowed_hosts.is_empty() {
+        let host = repo.trim_start_matches("https://").split('/').next().unwrap_or("");
+        if !allowed_hosts.iter().any(|h| host == h.as_str()) {
+            return Err(AppError::BadRequest(format!(
+                "repository host '{host}' not allowed. Allowed: {}",
+                allowed_hosts.join(", ")
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 /// Clone a repo and build a Docker image for it.
 /// Captures and returns build output for debugging.
 pub async fn clone_and_build(repo: &str, branch: &str, name: &str) -> Result<(String, u16), AppError> {
+    // Validate branch name — alphanumeric, hyphens, dots, underscores, slashes
+    if !branch.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '.' || c == '_' || c == '/') {
+        return Err(AppError::BadRequest(
+            "invalid branch name: only alphanumeric, hyphens, dots, underscores, and slashes allowed".into()
+        ));
+    }
+
     let work_dir = PathBuf::from("/tmp/routeroot-builds").join(name);
 
     // Clean up any previous build

@@ -39,6 +39,9 @@ pub async fn create_plan(
         sanitize_name(&format!("{}-{}", repo_short_name(&req.repo), &branch))
     });
 
+    // Validate repo URL against allowed hosts
+    builder::validate_repo_url(&req.repo, &state.config.allowed_repo_hosts)?;
+
     // Check limits
     let count = state.db.count_active_deployments()?;
     if count >= state.config.max_deployments {
@@ -126,6 +129,9 @@ pub async fn create_deployment(
     let name = req.name.unwrap_or_else(|| {
         sanitize_name(&format!("{}-{}", repo_short_name(&req.repo), &branch))
     });
+
+    // Validate repo URL against allowed hosts
+    builder::validate_repo_url(&req.repo, &state.config.allowed_repo_hosts)?;
 
     // Check limits
     let count = state.db.count_active_deployments()?;
@@ -385,7 +391,7 @@ fn repo_short_name(repo: &str) -> String {
 
 fn allocate_port(name: &str) -> u16 {
     let hash: u32 = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
-    32000 + (hash % 1000) as u16
+    32000 + (hash % 16000) as u16
 }
 
 fn parse_ttl(s: &str) -> u64 {

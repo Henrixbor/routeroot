@@ -8,7 +8,6 @@ mod services;
 use axum::Router;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -54,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
 
     let docker = services::docker::DockerService::new()?;
     let proxy = services::proxy::ProxyService::new(&config.caddy_admin_url);
-    let dns = services::dns::DnsService::new(&config.zone_file_path, &config.domain, &config.server_ip);
+    let dns = services::dns::DnsService::new(&config.zone_file_dir, &config.domains, &config.server_ip);
 
     let state = Arc::new(AppState { config, db, docker, proxy, dns });
 
@@ -67,12 +66,12 @@ async fn main() -> anyhow::Result<()> {
     // Replace Caddy's Caddyfile config with clean JSON config at startup
     tokio::spawn({
         let proxy = services::proxy::ProxyService::new(&state.config.caddy_admin_url);
-        let domain = state.config.domain.clone();
+        let domains = state.config.domains.clone();
         async move {
             // Wait for Caddy to be ready
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             let tls_check_url = "http://agent-api:8053/api/tls-check";
-            if let Err(e) = proxy.init_caddy_config(&domain, tls_check_url).await {
+            if let Err(e) = proxy.init_caddy_config(&domains, tls_check_url).await {
                 tracing::warn!("Failed to initialize Caddy config: {e}");
             }
         }
@@ -81,7 +80,24 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .nest("/api", routes::api_router(state.clone()))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive());
+        .layer({
+            use tower_http::cors::{AllowOrigin, AllowHeaders, AllowMethods};
+            use axum::http::{Method, HeaderName};
+            let origins: Vec<_> = state.config.domains.iter()
+                .flat_map(|d| [
+                    format!("https://{d}").parse().ok(),
+                    format!("https://api.{d}").parse().ok(),
+                ])
+                .flatten()
+                .collect();
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(AllowOrigin::list(origins))
+                .allow_methods(AllowMethods::list([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS]))
+                .allow_headers(AllowHeaders::list([
+                    HeaderName::from_static("authorization"),
+                    HeaderName::from_static("content-type"),
+                ]))
+        });
 
     let addr = "0.0.0.0:8053";
     tracing::info!("RouteRoot API listening on {addr}");

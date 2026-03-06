@@ -9,8 +9,15 @@ pub async fn verify_deployment(state: Arc<AppState>, name: String) {
     // Wait for DNS propagation + container startup
     sleep(Duration::from_secs(10)).await;
 
-    let domain = format!("{}.{}", name, state.config.domain);
-    let url = format!("https://{domain}");
+    // Determine which domain the deployment URL uses
+    let deployment = state.db.get_deployment(&name).ok().flatten();
+    let (domain, url) = if let Some(ref d) = deployment {
+        let host = d.url.trim_start_matches("https://").split('/').next().unwrap_or("").to_string();
+        (host.clone(), d.url.clone())
+    } else {
+        let host = format!("{}.{}", name, state.config.domain);
+        (host.clone(), format!("https://{host}"))
+    };
 
     // Step 1: DNS verification — check the domain resolves
     let dns_ok = verify_dns(&domain, &state.config.server_ip).await;
