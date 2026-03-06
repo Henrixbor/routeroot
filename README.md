@@ -24,7 +24,9 @@ RouteRoot is a self-hosted alternative to Vercel/Netlify preview deployments, bu
 - **Auto-detection** — Node.js, Rust, Go, Python, static sites, or bring your own Dockerfile
 - **Plan/Apply** — Dry-run deployments before executing (safe for agents)
 - **Promote** — Move preview → staging → production
-- **MCP Server** — 12 tools for Claude Code / any MCP client
+- **Custom Domains** — Map `client.com` to any deployment
+- **Path Routing** — Deploy at `yourdomain.dev/client/staging` instead of subdomains
+- **MCP Server** — 15 tools for Claude Code / any MCP client
 - **CLI** — `routeroot deploy`, `ls`, `logs`, `down`, `promote`, `audit`
 - **GitHub Webhooks** — Auto-deploy on push, auto-teardown on branch delete
 - **DNS Management** — Create/delete DNS records via API (NS/SOA/CAA protected)
@@ -46,7 +48,7 @@ RouteRoot is a self-hosted alternative to Vercel/Netlify preview deployments, bu
 ```bash
 # On your server (Ubuntu/Debian):
 git clone https://github.com/Henrixbor/routeroot.git
-cd RouteRoot
+cd routeroot
 sudo bash scripts/setup.sh
 ```
 
@@ -58,6 +60,13 @@ That's it. The script will:
 - Build and start all services
 - Install a systemd service (auto-start on reboot)
 - Install a watchdog cron (self-healing every 2 minutes)
+- Print your API key and full MCP/CLI setup instructions
+
+After install, configure DNS at your registrar:
+1. Set custom nameservers: `ns1.yourdomain` and `ns2.yourdomain`
+2. Create glue records pointing both to your server IP
+
+The setup script prints registrar-specific instructions for Namecheap, Porkbun, etc.
 
 ### Manual setup (if you prefer)
 
@@ -185,6 +194,34 @@ curl http://server:8053/api/records -H "Authorization: Bearer $KEY"
 curl -X DELETE http://server:8053/api/records/api -H "Authorization: Bearer $KEY"
 ```
 
+### Custom Domains
+
+```bash
+# Map a custom domain to a deployment
+curl -X POST http://server:8053/api/domains \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"domain": "app.client.com", "deployment_name": "my-app"}'
+# Returns CNAME instructions for the domain owner
+
+# List custom domain mappings
+curl http://server:8053/api/domains -H "Authorization: Bearer $KEY"
+
+# Remove a custom domain mapping
+curl -X DELETE http://server:8053/api/domains/app.client.com -H "Authorization: Bearer $KEY"
+```
+
+### Path-based Routing
+
+```bash
+# Deploy at yourdomain.dev/client instead of a subdomain
+curl -X POST http://server:8053/api/deploy \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"repo": "https://github.com/user/repo", "branch": "main", "path_prefix": "client/staging"}'
+# => https://yourdomain.dev/client/staging
+```
+
 ### Audit Log
 
 ```bash
@@ -217,6 +254,9 @@ Branches auto-deploy on push, auto-teardown on delete.
 | `list_dns_records` | List DNS records |
 | `delete_dns_record` | Delete a DNS record |
 | `health` | System health check |
+| `map_custom_domain` | Map a custom domain (e.g. client.com) to a deployment |
+| `list_custom_domains` | List all custom domain mappings |
+| `delete_custom_domain` | Remove a custom domain mapping |
 
 ## CLI Reference
 
@@ -233,6 +273,9 @@ routeroot down <name>
 routeroot record add <name> [-t type] <value>
 routeroot record ls
 routeroot record rm <name>
+routeroot domain map <domain> <deployment>
+routeroot domain ls
+routeroot domain rm <domain>
 routeroot audit [-l limit]
 routeroot health
 ```

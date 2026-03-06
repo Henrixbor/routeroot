@@ -29,6 +29,9 @@ enum Commands {
         ttl: Option<String>,
         #[arg(short, long, default_value = "preview")]
         environment: String,
+        /// Deploy at domain/prefix instead of subdomain
+        #[arg(long)]
+        path_prefix: Option<String>,
     },
     /// Create a deployment plan (dry-run)
     Plan {
@@ -66,6 +69,11 @@ enum Commands {
         #[command(subcommand)]
         action: RecordAction,
     },
+    /// Manage custom domain mappings
+    Domain {
+        #[command(subcommand)]
+        action: DomainAction,
+    },
     /// View audit log
     Audit {
         #[arg(short, long, default_value = "20")]
@@ -73,6 +81,8 @@ enum Commands {
     },
     /// Check system health
     Health,
+    /// Show setup instructions for connecting Claude Code, CLI, and webhooks
+    Setup,
 }
 
 #[derive(Subcommand)]
@@ -88,6 +98,24 @@ enum RecordAction {
     Ls,
     /// Remove a DNS record
     Rm { name: String },
+}
+
+#[derive(Subcommand)]
+enum DomainAction {
+    /// Map a custom domain to a deployment (e.g. client.com -> my-app)
+    Map {
+        /// Custom domain (e.g. app.client.com)
+        domain: String,
+        /// Deployment name to route to
+        deployment: String,
+    },
+    /// List all custom domain mappings
+    Ls,
+    /// Remove a custom domain mapping
+    Rm {
+        /// Custom domain to remove
+        domain: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -156,9 +184,9 @@ fn main() {
     let auth = format!("Bearer {}", cli.key);
 
     match cli.command {
-        Commands::Deploy { repo, branch, name, ttl, environment } => {
+        Commands::Deploy { repo, branch, name, ttl, environment, path_prefix } => {
             let body = serde_json::json!({
-                "repo": repo, "branch": branch, "name": name, "ttl": ttl, "environment": environment,
+                "repo": repo, "branch": branch, "name": name, "ttl": ttl, "environment": environment, "path_prefix": path_prefix,
             });
             match api_post::<DeployResponse>(&client, &format!("{base}/api/deploy"), &auth, &body) {
                 Ok(resp) => {
@@ -349,6 +377,53 @@ fn main() {
             }
         }
 
+        Commands::Domain { action } => match action {
+            DomainAction::Map { domain, deployment } => {
+                let body = serde_json::json!({
+                    "domain": domain, "deployment_name": deployment,
+                });
+                match api_post::<serde_json::Value>(&client, &format!("{base}/api/domains"), &auth, &body) {
+                    Ok(resp) => {
+                        println!("Custom domain mapped: {} -> {}", domain, deployment);
+                        if let Some(instructions) = resp.get("instructions").and_then(|v| v.as_str()) {
+                            println!();
+                            println!("Next step:");
+                            println!("  {}", instructions);
+                        }
+                    }
+                    Err(e) => eprintln!("Error: {e}"),
+                }
+            }
+            DomainAction::Ls => {
+                match api_get::<Vec<serde_json::Value>>(&client, &format!("{base}/api/domains"), &auth) {
+                    Ok(domains) => {
+                        if domains.is_empty() {
+                            println!("No custom domain mappings.");
+                            return;
+                        }
+                        println!("{:<30} {:<20} {:<10}", "DOMAIN", "DEPLOYMENT", "VERIFIED");
+                        println!("{}", "-".repeat(60));
+                        for d in domains {
+                            println!("{:<30} {:<20} {:<10}",
+                                d.get("domain").and_then(|v| v.as_str()).unwrap_or("-"),
+                                d.get("deployment_name").and_then(|v| v.as_str()).unwrap_or("-"),
+                                d.get("verified").and_then(|v| v.as_bool()).map(|b| if b { "yes" } else { "no" }).unwrap_or("-"),
+                            );
+                        }
+                    }
+                    Err(e) => eprintln!("Error: {e}"),
+                }
+            }
+            DomainAction::Rm { domain } => {
+                match client.delete(format!("{base}/api/domains/{domain}"))
+                    .header("Authorization", &auth)
+                    .send() {
+                    Ok(_) => println!("Custom domain '{}' removed.", domain),
+                    Err(e) => eprintln!("Error: {e}"),
+                }
+            }
+        },
+
         Commands::Health => {
             match api_get::<HealthResponse>(&client, &format!("{base}/api/health"), "") {
                 Ok(h) => {
@@ -358,6 +433,56 @@ fn main() {
                 }
                 Err(e) => eprintln!("Error: {e}"),
             }
+        }
+
+        Commands::Setup => {
+            println!("RouteRoot Setup Guide");
+            println!("=====================");
+            println!();
+            println!("1. CONNECT CLI");
+            println!("   export ROUTEROOT_URL=http://YOUR_SERVER:8053");
+            println!("   export ROUTEROOT_API_KEY=YOUR_API_KEY");
+            println!("   routeroot health");
+            println!();
+            println!("2. CONNECT CLAUDE CODE (MCP)");
+            println!("   Build:  cargo install --path mcp-server");
+            println!("   Add to ~/.claude/mcp.json:");
+            println!("   {{");
+            println!("     \"mcpServers\": {{");
+            println!("       \"routeroot\": {{");
+            println!("         \"command\": \"routeroot-mcp\",");
+            println!("         \"env\": {{");
+            println!("           \"ROUTEROOT_URL\": \"http://YOUR_SERVER:8053\",");
+            println!("           \"ROUTEROOT_API_KEY\": \"YOUR_API_KEY\"");
+            println!("         }}");
+            println!("       }}");
+            println!("     }}");
+            println!("   }}");
+            println!("   Restart Claude Code — 15 tools become available.");
+            println!();
+            println!("3. DEPLOY YOUR FIRST BRANCH");
+            println!("   routeroot deploy https://github.com/user/repo --branch main");
+            println!("   routeroot ls");
+            println!();
+            println!("4. CUSTOM DOMAINS");
+            println!("   routeroot domain map app.client.com my-deployment");
+            println!("   Then add a CNAME at client.com's DNS: app -> my-deployment.yourdomain");
+            println!();
+            println!("5. PATH ROUTING");
+            println!("   routeroot deploy https://github.com/user/repo --path-prefix client/staging");
+            println!("   => https://yourdomain.dev/client/staging");
+            println!();
+            println!("6. GITHUB WEBHOOKS");
+            println!("   Repo Settings -> Webhooks -> Add:");
+            println!("   URL: http://YOUR_SERVER:8053/api/webhook/github");
+            println!("   Content type: application/json");
+            println!("   Events: Push");
+            println!();
+            println!("7. PROMOTE");
+            println!("   routeroot promote my-app staging");
+            println!("   routeroot promote my-app production");
+            println!();
+            println!("Full docs: https://github.com/Henrixbor/routeroot");
         }
     }
 }

@@ -107,7 +107,7 @@ fn tool_definitions() -> Value {
         "tools": [
             {
                 "name": "deploy_preview",
-                "description": "Deploy a git repo branch as a live preview URL. By default creates a subdomain (repo-branch.routeroot.dev). Optionally use path_prefix for path-based routing (routeroot.dev/prefix).",
+                "description": "Deploy a git repo branch as a live preview URL via RouteRoot. Creates a subdomain (repo-branch.yourdomain) by default. Use path_prefix for path-based routing (yourdomain/prefix). Returns the live URL immediately.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -115,7 +115,7 @@ fn tool_definitions() -> Value {
                         "branch": { "type": "string", "description": "Branch to deploy (default: main)" },
                         "name": { "type": "string", "description": "Optional deployment name" },
                         "ttl": { "type": "string", "description": "Time to live, e.g. '24h'" },
-                        "path_prefix": { "type": "string", "description": "Optional: deploy at routeroot.dev/prefix instead of subdomain" }
+                        "path_prefix": { "type": "string", "description": "Optional: deploy at yourdomain/prefix instead of subdomain" }
                     },
                     "required": ["repo"]
                 }
@@ -141,7 +141,7 @@ fn tool_definitions() -> Value {
             },
             {
                 "name": "teardown",
-                "description": "Tear down an RouteRoot deployment.",
+                "description": "Tear down a RouteRoot deployment.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -152,7 +152,7 @@ fn tool_definitions() -> Value {
             },
             {
                 "name": "get_logs",
-                "description": "Get container logs for an RouteRoot deployment.",
+                "description": "Get container logs for a RouteRoot deployment.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
