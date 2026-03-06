@@ -64,15 +64,16 @@ async fn main() -> anyhow::Result<()> {
         services::cleanup::run_cleanup_loop(cleanup_state).await;
     });
 
-    // Patch Caddyfile routes to non-terminal so dynamic routes match first
+    // Replace Caddy's Caddyfile config with clean JSON config at startup
     tokio::spawn({
         let proxy = services::proxy::ProxyService::new(&state.config.caddy_admin_url);
         let domain = state.config.domain.clone();
         async move {
             // Wait for Caddy to be ready
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            if let Err(e) = proxy.patch_caddyfile_routes(&domain).await {
-                tracing::warn!("Failed to patch Caddyfile routes: {e}");
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            let tls_check_url = "http://agent-api:8053/api/tls-check";
+            if let Err(e) = proxy.init_caddy_config(&domain, tls_check_url).await {
+                tracing::warn!("Failed to initialize Caddy config: {e}");
             }
         }
     });

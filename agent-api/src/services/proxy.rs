@@ -97,6 +97,7 @@ impl ProxyService {
     }
 
     /// Register a path-based route: domain/path/* → localhost:port
+    /// Inserts before the root domain catch-all by reading, splicing, and replacing the routes array.
     pub async fn add_path_route(&self, path_prefix: &str, domain: &str, target_port: u16) -> Result<(), AppError> {
         let route_id = format!("routeroot-path-{}", path_prefix.replace('/', "-"));
 
@@ -119,8 +120,29 @@ impl ProxyService {
             ]
         });
 
+        // Read current routes, find root domain index, insert before it
         let url = format!("{}/config/apps/http/servers/srv0/routes", self.admin_url);
-        let resp = self.client.post(&url).json(&route).send().await
+        let resp = self.client.get(&url).send().await
+            .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
+        let mut routes: Vec<serde_json::Value> = resp.json().await
+            .map_err(|e| AppError::Internal(format!("failed to parse routes: {e}")))?;
+
+        // Find the root domain catch-all (matches domain without path constraints)
+        let insert_idx = routes.iter().position(|r| {
+            let hosts = r.get("match").and_then(|m| m.as_array()).and_then(|a| a.first())
+                .and_then(|m| m.get("host")).and_then(|h| h.as_array());
+            let has_path = r.get("match").and_then(|m| m.as_array()).and_then(|a| a.first())
+                .and_then(|m| m.get("path")).is_some();
+            hosts.map_or(false, |h| h.iter().any(|v| v.as_str() == Some(domain))) && !has_path
+        }).unwrap_or(routes.len());
+
+        routes.insert(insert_idx, route);
+
+        // Replace entire routes array
+        let resp = self.client.patch(&url)
+            .json(&routes)
+            .send()
+            .await
             .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
 
         if !resp.status().is_success() {
@@ -128,7 +150,7 @@ impl ProxyService {
             return Err(AppError::Internal(format!("caddy path route failed: {body}")));
         }
 
-        tracing::info!("Added Caddy path route: {domain}/{path_prefix} → localhost:{target_port}");
+        tracing::info!("Added Caddy path route: {domain}/{path_prefix} → localhost:{target_port} (at index {insert_idx})");
         Ok(())
     }
 
@@ -147,40 +169,73 @@ impl ProxyService {
         Ok(())
     }
 
-    /// Patch Caddyfile routes to non-terminal so dynamic routes can match.
-    /// The wildcard (*.domain) and root domain routes from the Caddyfile are terminal,
-    /// blocking dynamic subdomain and path-prefix routes from matching.
-    pub async fn patch_caddyfile_routes(&self, domain: &str) -> Result<(), AppError> {
-        let url = format!("{}/config/apps/http/servers/srv0/routes", self.admin_url);
-        let resp = self.client.get(&url).send().await
-            .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
-        let routes: Vec<serde_json::Value> = resp.json().await
-            .map_err(|e| AppError::Internal(format!("failed to parse routes: {e}")))?;
-
+    /// Replace Caddy's entire config with a clean JSON config.
+    /// This avoids the ordering/terminal issues with Caddyfile-generated routes.
+    pub async fn init_caddy_config(&self, domain: &str, tls_check_url: &str) -> Result<(), AppError> {
         let wildcard = format!("*.{domain}");
-        for (i, route) in routes.iter().enumerate() {
-            let hosts = route.get("match")
-                .and_then(|m| m.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|m| m.get("host"))
-                .and_then(|h| h.as_array());
-            let is_target = hosts.map_or(false, |h| h.iter().any(|v| {
-                v.as_str().map_or(false, |s| s == domain || s == wildcard)
-            }));
-            let is_terminal = route.get("terminal").and_then(|t| t.as_bool()).unwrap_or(false);
-            // Don't patch api.domain
-            let is_api = hosts.map_or(false, |h| h.iter().any(|v| v.as_str().map_or(false, |s| s.starts_with("api."))));
+        let api_host = format!("api.{domain}");
 
-            if is_target && is_terminal && !is_api {
-                let patch_url = format!("{}/config/apps/http/servers/srv0/routes/{}/terminal", self.admin_url, i);
-                self.client.patch(&patch_url)
-                    .json(&false)
-                    .send()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("failed to patch route: {e}")))?;
-                tracing::info!("Patched Caddyfile route at index {} to non-terminal", i);
+        let config = json!({
+            "admin": { "listen": ":2019" },
+            "apps": {
+                "tls": {
+                    "automation": {
+                        "on_demand": {
+                            "permission": {
+                                "module": "http",
+                                "endpoint": tls_check_url
+                            }
+                        },
+                        "policies": [{
+                            "subjects": [wildcard],
+                            "issuers": [{
+                                "module": "acme"
+                            }],
+                            "on_demand": true
+                        }]
+                    }
+                },
+                "http": {
+                    "servers": {
+                        "srv0": {
+                            "listen": [":443", ":80"],
+                            "routes": [
+                                {
+                                    "match": [{ "host": [&api_host] }],
+                                    "handle": [{
+                                        "handler": "reverse_proxy",
+                                        "upstreams": [{ "dial": "agent-api:8053" }]
+                                    }],
+                                    "terminal": true
+                                },
+                                {
+                                    "match": [{ "host": [domain] }],
+                                    "handle": [{
+                                        "handler": "reverse_proxy",
+                                        "upstreams": [{ "dial": "agent-api:8053" }]
+                                    }]
+                                    // NOT terminal — path routes appended later take priority
+                                }
+                            ]
+                        }
+                    }
+                }
             }
+        });
+
+        let url = format!("{}/config/", self.admin_url);
+        let resp = self.client.put(&url)
+            .json(&config)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("caddy config load failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!("caddy config load failed: {body}")));
         }
+
+        tracing::info!("Initialized Caddy config via JSON API for domain {domain}");
         Ok(())
     }
 
