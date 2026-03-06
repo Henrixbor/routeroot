@@ -74,6 +74,11 @@ enum Commands {
         #[command(subcommand)]
         action: DomainAction,
     },
+    /// Manage server domains (add/remove domains dynamically)
+    Server {
+        #[command(subcommand)]
+        action: ServerAction,
+    },
     /// View audit log
     Audit {
         #[arg(short, long, default_value = "20")]
@@ -118,6 +123,25 @@ enum DomainAction {
     /// Remove a custom domain mapping
     Rm {
         /// Custom domain to remove
+        domain: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServerAction {
+    /// Add a new managed domain dynamically
+    #[command(name = "add-domain")]
+    AddDomain {
+        /// Domain to add (e.g. vibeyard.io)
+        domain: String,
+    },
+    /// List all managed domains
+    #[command(name = "domains")]
+    ListDomains,
+    /// Remove a dynamically added domain
+    #[command(name = "rm-domain")]
+    RmDomain {
+        /// Domain to remove
         domain: String,
     },
 }
@@ -360,6 +384,58 @@ fn main() {
                     .header("Authorization", &auth)
                     .send() {
                     Ok(_) => println!("Record '{name}' deleted."),
+                    Err(e) => eprintln!("Error: {e}"),
+                }
+            }
+        },
+
+        Commands::Server { action } => match action {
+            ServerAction::AddDomain { domain } => {
+                let body = serde_json::json!({ "domain": domain });
+                match api_post::<serde_json::Value>(&client, &format!("{base}/api/managed-domains"), &auth, &body) {
+                    Ok(resp) => {
+                        println!("Domain added: {}", resp.get("domain").and_then(|v| v.as_str()).unwrap_or(&domain));
+                        println!("Status:       {}", resp.get("status").and_then(|v| v.as_str()).unwrap_or("unknown"));
+                        if let Some(instructions) = resp.get("instructions").and_then(|v| v.as_str()) {
+                            println!();
+                            println!("{instructions}");
+                        }
+                    }
+                    Err(e) => eprintln!("Error: {e}"),
+                }
+            }
+            ServerAction::ListDomains => {
+                match api_get::<Vec<serde_json::Value>>(&client, &format!("{base}/api/managed-domains"), &auth) {
+                    Ok(domains) => {
+                        if domains.is_empty() {
+                            println!("No managed domains.");
+                            return;
+                        }
+                        println!("{:<30} {:<16} {:<10} {:<10}", "DOMAIN", "IP", "STATUS", "SOURCE");
+                        println!("{}", "-".repeat(66));
+                        for d in domains {
+                            let created = d.get("created_at").and_then(|v| v.as_str()).unwrap_or("-");
+                            let source = if created == "config" { "config" } else { "dynamic" };
+                            println!("{:<30} {:<16} {:<10} {:<10}",
+                                d.get("domain").and_then(|v| v.as_str()).unwrap_or("-"),
+                                d.get("server_ip").and_then(|v| v.as_str()).unwrap_or("-"),
+                                d.get("status").and_then(|v| v.as_str()).unwrap_or("-"),
+                                source,
+                            );
+                        }
+                    }
+                    Err(e) => eprintln!("Error: {e}"),
+                }
+            }
+            ServerAction::RmDomain { domain } => {
+                match client.delete(format!("{base}/api/managed-domains/{domain}"))
+                    .header("Authorization", &auth)
+                    .send() {
+                    Ok(resp) if resp.status().is_success() => println!("Domain '{domain}' removed."),
+                    Ok(resp) => {
+                        let body = resp.text().unwrap_or_default();
+                        eprintln!("Error: {body}");
+                    }
                     Err(e) => eprintln!("Error: {e}"),
                 }
             }

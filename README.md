@@ -353,9 +353,12 @@ routeroot record rm <name>
 routeroot domain map <domain> <deployment>
 routeroot domain ls
 routeroot domain rm <domain>
+routeroot server add-domain <domain>
+routeroot server domains
+routeroot server rm-domain <domain>
 routeroot audit [-l limit]
 routeroot health
-routeroot setup
+routeroot setup [--configure-mcp]
 ```
 
 Environment variables: `ROUTEROOT_URL`, `ROUTEROOT_API_KEY`
