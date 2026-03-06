@@ -21,19 +21,21 @@ RouteRoot is a self-hosted alternative to Vercel/Netlify preview deployments, bu
 ### Features
 
 - **Instant preview URLs** — Any git branch becomes `https://branch-name.yourdomain.dev`
+- **Multi-domain** — Serve multiple domains simultaneously (e.g. `routeroot.dev` + `vibeyard.io`)
 - **Auto-detection** — Node.js, Rust, Go, Python, static sites, or bring your own Dockerfile
 - **Plan/Apply** — Dry-run deployments before executing (safe for agents)
 - **Promote** — Move preview → staging → production
 - **Custom Domains** — Map `client.com` to any deployment
 - **Path Routing** — Deploy at `yourdomain.dev/client/staging` instead of subdomains
 - **MCP Server** — 15 tools for Claude Code / any MCP client
-- **CLI** — `routeroot deploy`, `ls`, `logs`, `down`, `promote`, `audit`
+- **CLI** — `routeroot deploy`, `ls`, `logs`, `down`, `promote`, `audit`, `setup`
 - **GitHub Webhooks** — Auto-deploy on push, auto-teardown on branch delete
 - **DNS Management** — Create/delete DNS records via API (NS/SOA/CAA protected)
 - **Audit Log** — Every mutation logged with actor, action, timestamp
 - **Verification** — DNS + HTTP health checks after every deployment
 - **Auto-expire** — Preview deployments auto-cleanup after configurable TTL
 - **On-demand TLS** — Automatic HTTPS via Let's Encrypt for every subdomain
+- **Security hardened** — Constant-time auth, repo allowlist, zone injection prevention, CORS, internal network isolation
 
 ## Quick Start
 
@@ -47,7 +49,7 @@ RouteRoot is a self-hosted alternative to Vercel/Netlify preview deployments, bu
 
 ```bash
 # On your server (Ubuntu/Debian):
-git clone https://github.com/Henrixbor/routeroot.git
+git clone https://github.com/Vibeyard/AgentDNS.git routeroot
 cd routeroot
 sudo bash scripts/setup.sh
 ```
@@ -55,12 +57,13 @@ sudo bash scripts/setup.sh
 That's it. The script will:
 - Install Docker if needed
 - Ask for your domain and detect your server IP
-- Generate a secure API key
-- Create zone files for your domain
+- Generate a secure API key (min 16 chars, rejects insecure defaults)
+- Create zone files for your domain(s)
 - Build and start all services
 - Install a systemd service (auto-start on reboot)
 - Install a watchdog cron (self-healing every 2 minutes)
 - Print your API key and full MCP/CLI setup instructions
+- Configure the MCP server for Claude Code integration
 
 After install, configure DNS at your registrar:
 1. Set custom nameservers: `ns1.yourdomain` and `ns2.yourdomain`
@@ -73,18 +76,21 @@ The setup script prints registrar-specific instructions for Namecheap, Porkbun, 
 
 ```bash
 cp .env.example .env
-# Edit .env: set ROUTEROOT_DOMAIN, ROUTEROOT_SERVER_IP (must be your actual public IP), ROUTEROOT_API_KEY
+# Edit .env: set ROUTEROOT_DOMAIN, ROUTEROOT_SERVER_IP, ROUTEROOT_API_KEY (min 16 chars)
+# Optional: ROUTEROOT_DOMAINS=domain1.com,domain2.com for multi-domain
 
 # Generate zone file for your domain (setup.sh does this automatically)
 mkdir -p coredns/zones data
 # Create coredns/zones/db.yourdomain with A records pointing to your server IP
 
 docker compose up -d
-curl http://localhost:8053/api/health
+# API is only accessible via HTTPS through Caddy:
+curl https://api.yourdomain.dev/api/health
 ```
 
 Note: The agent-api container needs Docker access (socket is mounted) and includes `docker-ce-cli` for builds.
 Caddy needs `host.docker.internal` resolution to reach deployment containers (configured via `extra_hosts` in docker-compose.yml).
+The API port (8053) is bound to localhost only — external access goes through Caddy at `https://api.yourdomain`.
 
 ### 3. Deploy your first branch
 
@@ -93,26 +99,31 @@ Caddy needs `host.docker.internal` resolution to reach deployment containers (co
 cargo install --path cli
 
 # Deploy
-export ROUTEROOT_URL=http://your-server:8053
+export ROUTEROOT_URL=https://api.yourdomain.dev
 export ROUTEROOT_API_KEY=your-key
 routeroot deploy https://github.com/user/repo --branch main
 ```
 
 ### 4. Connect AI agents (MCP)
 
+The `setup` command handles end-to-end configuration:
+
 ```bash
-# Build the MCP server
+# Build the MCP server binary
 cargo install --path mcp-server
+
+# Show full setup instructions (including MCP config)
+routeroot setup
 ```
 
-Add to `~/.claude/mcp.json`:
+Or configure manually — add to `~/.claude/mcp.json`:
 ```json
 {
   "mcpServers": {
     "routeroot": {
       "command": "routeroot-mcp",
       "env": {
-        "ROUTEROOT_URL": "http://your-server:8053",
+        "ROUTEROOT_URL": "https://api.yourdomain.dev",
         "ROUTEROOT_API_KEY": "your-key"
       }
     }
@@ -120,17 +131,18 @@ Add to `~/.claude/mcp.json`:
 }
 ```
 
-Now Claude Code can deploy branches, check status, read logs, and tear down previews autonomously.
+Restart Claude Code — 15 tools become available. Now Claude Code can deploy branches, check status, read logs, and tear down previews autonomously.
 
 ## API Reference
 
-All endpoints except `/api/health` require `Authorization: Bearer <API_KEY>`.
+All endpoints except `/api/health` and `/api/tls-check` require `Authorization: Bearer <API_KEY>`.
+The API is accessible at `https://api.yourdomain.dev` (routed through Caddy with TLS).
 
 ### Deploy
 
 ```bash
 # Deploy a branch
-curl -X POST http://server:8053/api/deploy \
+curl -X POST https://api.yourdomain.dev/api/deploy \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{"repo": "https://github.com/user/repo", "branch": "feat/login", "ttl": "24h"}'
@@ -143,7 +155,7 @@ curl -X POST http://server:8053/api/deploy \
 
 ```bash
 # Create plan (dry-run)
-curl -X POST http://server:8053/api/plan \
+curl -X POST https://api.yourdomain.dev/api/plan \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{"repo": "https://github.com/user/repo", "branch": "main"}'
@@ -151,7 +163,7 @@ curl -X POST http://server:8053/api/plan \
 # Response includes plan ID and list of actions that will be taken
 
 # Apply the plan
-curl -X POST http://server:8053/api/plan/PLAN_ID/apply \
+curl -X POST https://api.yourdomain.dev/api/plan/PLAN_ID/apply \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -159,13 +171,13 @@ curl -X POST http://server:8053/api/plan/PLAN_ID/apply \
 
 ```bash
 # Promote preview to staging
-curl -X POST http://server:8053/api/deploy/my-app/promote \
+curl -X POST https://api.yourdomain.dev/api/deploy/my-app/promote \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{"target": "staging"}'
 
 # Promote to production (removes auto-expire)
-curl -X POST http://server:8053/api/deploy/my-app/promote \
+curl -X POST https://api.yourdomain.dev/api/deploy/my-app/promote \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{"target": "production"}'
@@ -175,56 +187,56 @@ curl -X POST http://server:8053/api/deploy/my-app/promote \
 
 ```bash
 # List all
-curl http://server:8053/api/deployments -H "Authorization: Bearer $KEY"
+curl https://api.yourdomain.dev/api/deployments -H "Authorization: Bearer $KEY"
 
 # Get details
-curl http://server:8053/api/deployments/my-app -H "Authorization: Bearer $KEY"
+curl https://api.yourdomain.dev/api/deployments/my-app -H "Authorization: Bearer $KEY"
 
 # Get logs
-curl http://server:8053/api/deployments/my-app/logs -H "Authorization: Bearer $KEY"
+curl https://api.yourdomain.dev/api/deployments/my-app/logs -H "Authorization: Bearer $KEY"
 
 # Tear down
-curl -X DELETE http://server:8053/api/deploy/my-app -H "Authorization: Bearer $KEY"
+curl -X DELETE https://api.yourdomain.dev/api/deploy/my-app -H "Authorization: Bearer $KEY"
 ```
 
 ### DNS Records
 
 ```bash
 # Create record (NS, SOA, CAA are blocked — protected)
-curl -X POST http://server:8053/api/records \
+curl -X POST https://api.yourdomain.dev/api/records \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{"name": "api", "record_type": "A", "value": "1.2.3.4"}'
 
 # List records
-curl http://server:8053/api/records -H "Authorization: Bearer $KEY"
+curl https://api.yourdomain.dev/api/records -H "Authorization: Bearer $KEY"
 
 # Delete record
-curl -X DELETE http://server:8053/api/records/api -H "Authorization: Bearer $KEY"
+curl -X DELETE https://api.yourdomain.dev/api/records/api -H "Authorization: Bearer $KEY"
 ```
 
 ### Custom Domains
 
 ```bash
 # Map a custom domain to a deployment
-curl -X POST http://server:8053/api/domains \
+curl -X POST https://api.yourdomain.dev/api/domains \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{"domain": "app.client.com", "deployment_name": "my-app"}'
 # Returns CNAME instructions for the domain owner
 
 # List custom domain mappings
-curl http://server:8053/api/domains -H "Authorization: Bearer $KEY"
+curl https://api.yourdomain.dev/api/domains -H "Authorization: Bearer $KEY"
 
 # Remove a custom domain mapping
-curl -X DELETE http://server:8053/api/domains/app.client.com -H "Authorization: Bearer $KEY"
+curl -X DELETE https://api.yourdomain.dev/api/domains/app.client.com -H "Authorization: Bearer $KEY"
 ```
 
 ### Path-based Routing
 
 ```bash
 # Deploy at yourdomain.dev/client instead of a subdomain
-curl -X POST http://server:8053/api/deploy \
+curl -X POST https://api.yourdomain.dev/api/deploy \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{"repo": "https://github.com/user/repo", "branch": "main", "path_prefix": "client/staging"}'
@@ -234,13 +246,13 @@ curl -X POST http://server:8053/api/deploy \
 ### Audit Log
 
 ```bash
-curl http://server:8053/api/audit -H "Authorization: Bearer $KEY"
+curl https://api.yourdomain.dev/api/audit -H "Authorization: Bearer $KEY"
 ```
 
 ### GitHub Webhook
 
 Set up in your repo: Settings → Webhooks → Add webhook:
-- URL: `http://your-server:8053/api/webhook/github`
+- URL: `https://api.yourdomain.dev/api/webhook/github`
 - Content type: `application/json`
 - Secret: your `ROUTEROOT_GITHUB_WEBHOOK_SECRET`
 - Events: Push events
@@ -270,7 +282,7 @@ Branches auto-deploy on push, auto-teardown on delete.
 ## CLI Reference
 
 ```
-routeroot deploy <repo> [-b branch] [-n name] [-t ttl] [-e environment]
+routeroot deploy <repo> [-b branch] [-n name] [-t ttl] [-e environment] [--path-prefix prefix]
 routeroot plan <repo> [-b branch] [-n name] [-t ttl]
 routeroot apply <plan_id>
 routeroot plans
@@ -287,6 +299,7 @@ routeroot domain ls
 routeroot domain rm <domain>
 routeroot audit [-l limit]
 routeroot health
+routeroot setup
 ```
 
 Environment variables: `ROUTEROOT_URL`, `ROUTEROOT_API_KEY`
@@ -295,25 +308,63 @@ Environment variables: `ROUTEROOT_URL`, `ROUTEROOT_API_KEY`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ROUTEROOT_DOMAIN` | `routeroot.dev` | Your domain |
+| `ROUTEROOT_DOMAIN` | `routeroot.dev` | Primary domain |
+| `ROUTEROOT_DOMAINS` | (same as DOMAIN) | Comma-separated list of all domains (e.g. `routeroot.dev,vibeyard.io`) |
 | `ROUTEROOT_SERVER_IP` | `127.0.0.1` | Server public IP (must match DNS zone A records) |
-| `ROUTEROOT_API_KEY` | `dev-key` | API authentication key |
+| `ROUTEROOT_API_KEY` | (required) | API authentication key (min 16 chars, rejects insecure defaults) |
 | `ROUTEROOT_MAX_DEPLOYMENTS` | `20` | Max concurrent deployments |
 | `ROUTEROOT_DEFAULT_TTL` | `48h` | Default preview expiry |
 | `ROUTEROOT_MAX_MEMORY` | `2048` | MB per container |
 | `ROUTEROOT_MAX_CPUS` | `2` | CPUs per container |
 | `ROUTEROOT_LOG_FORMAT` | (human) | Set to `json` for structured logging |
 | `ROUTEROOT_GITHUB_WEBHOOK_SECRET` | (none) | GitHub webhook HMAC secret |
+| `ROUTEROOT_ALLOWED_REPO_HOSTS` | `github.com,gitlab.com,bitbucket.org` | Allowed git repo hosts (HTTPS only) |
 | `ROUTEROOT_CADDY_ADMIN` | `http://caddy:2019` | Caddy JSON admin API (set by docker-compose) |
 | `DATABASE_PATH` | `/data/routeroot.db` | SQLite DB path (set by docker-compose) |
-| `ZONE_FILE_PATH` | `/dns-zones/db.domain` | CoreDNS zone file path (set by docker-compose) |
+| `ZONE_FILE_DIR` | `/dns-zones` | CoreDNS zone file directory (one file per domain) |
+
+## Multi-Domain Support
+
+RouteRoot can serve multiple domains simultaneously:
+
+```bash
+# In .env:
+ROUTEROOT_DOMAINS=routeroot.dev,vibeyard.io
+```
+
+Each domain gets:
+- Its own CoreDNS zone file (`coredns/zones/db.domain`)
+- Caddy wildcard TLS policy (`*.domain`)
+- API route at `api.domain`
+- Root domain route
+- Independent subdomain deployments
+
+The first domain in the list is the primary (used for deployments by default). Each domain needs NS records at its registrar pointing to the server.
+
+## Security
+
+RouteRoot is hardened for real-world use:
+
+- **API key required** — Min 16 chars, rejects known defaults (`dev-key`, `change-me`, etc.)
+- **Constant-time auth** — HMAC-based key comparison prevents timing attacks
+- **Repo URL allowlist** — Only HTTPS repos from configured hosts (default: github.com, gitlab.com, bitbucket.org)
+- **DNS zone injection prevention** — Record names, types, and values validated against metacharacters
+- **Protected DNS records** — NS, SOA, CAA cannot be created/deleted via API
+- **TLS cert scoping** — Only issues certs for subdomains with active deployments (prevents ACME abuse)
+- **API port localhost-only** — Port 8053 bound to `127.0.0.1`; external access via Caddy HTTPS (`api.domain`)
+- **Internal Docker network** — Caddy admin API (`:2019`) not exposed outside the internal bridge network
+- **CORS restricted** — Only managed domain origins allowed
+- **Container hardening** — `no-new-privileges`, PID limits, empty binds, tmpfs `/tmp`, memory/CPU limits
+- **Internal error masking** — Real errors logged server-side, generic messages returned to clients
+- **Audit log** — All mutations logged with actor, resource, and details
+- **Webhook signature verification** — GitHub HMAC-SHA256
 
 ## Architecture
 
 ```
 Internet → CoreDNS (:53)     ← authoritative DNS, wildcard *.domain → server IP
          → Caddy (:443)      ← reverse proxy, on-demand TLS, JSON API config
-         → Agent API (:8053) ← control plane, manages everything
+         → api.domain (HTTPS) ← control plane API (routed through Caddy)
                 ↓
            Docker containers  ← one per deployment, bind 0.0.0.0, resource-limited
                 ↓
@@ -328,6 +379,7 @@ Internet → CoreDNS (:53)     ← authoritative DNS, wildcard *.domain → serv
 - Deployed containers bind to `0.0.0.0` (not `127.0.0.1`) so Caddy can route to them
 - Path-prefix routes are inserted before the root domain catch-all for correct ordering
 - DNS zone files must have A records pointing to the actual server IP
+- API port 8053 is localhost-only; all external API traffic goes through Caddy HTTPS
 
 ## Scaling
 
@@ -351,6 +403,15 @@ Internet → CoreDNS (:53)     ← authoritative DNS, wildcard *.domain → serv
 3. Register with control plane
 4. New deployments auto-route to available capacity
 5. CoreDNS handles the routing — no global DNS propagation delay
+
+## Server Requirements
+
+- Linux server with Docker installed
+- Ports open: 53 (DNS), 80 (HTTP), 443 (HTTPS)
+- A domain with NS records pointing to this server
+- ~2GB RAM minimum for the platform itself, plus resources for deployments
+
+Note: Port 8053 (API) is NOT opened externally — it's localhost-only. External API access goes through Caddy at `https://api.yourdomain`.
 
 ## License
 

@@ -29,6 +29,15 @@ fi
 source .env 2>/dev/null || { echo "  FAIL: .env is malformed"; exit 1; }
 echo "  OK: .env (domain=$ROUTEROOT_DOMAIN, ip=$ROUTEROOT_SERVER_IP)"
 
+# --- Parse multi-domain list ---
+DOMAINS="${ROUTEROOT_DOMAINS:-$ROUTEROOT_DOMAIN}"
+IFS=',' read -ra DOMAIN_LIST <<< "$DOMAINS"
+if [ "${#DOMAIN_LIST[@]}" -gt 1 ]; then
+    echo "  OK: Multi-domain (${#DOMAIN_LIST[@]} domains: $DOMAINS)"
+else
+    echo "  OK: Single domain ($ROUTEROOT_DOMAIN)"
+fi
+
 # --- Check .env has IPv4 not IPv6 ---
 if echo "$ROUTEROOT_SERVER_IP" | grep -q ":"; then
     REAL_IP=$(curl -4 -sf --max-time 5 ifconfig.me 2>/dev/null \
@@ -46,6 +55,23 @@ if echo "$ROUTEROOT_SERVER_IP" | grep -q ":"; then
     fi
 else
     echo "  OK: Server IP is IPv4"
+fi
+
+# --- Check API key strength ---
+if [ -n "${ROUTEROOT_API_KEY:-}" ]; then
+    KEY_LEN=${#ROUTEROOT_API_KEY}
+    if [ "$KEY_LEN" -lt 16 ]; then
+        echo "  ERROR: API key too short ($KEY_LEN chars, need 16+)"
+        ERRORS=$((ERRORS + 1))
+    elif [ "$ROUTEROOT_API_KEY" = "dev-key" ] || [ "$ROUTEROOT_API_KEY" = "change-me" ] || [ "$ROUTEROOT_API_KEY" = "change-me-to-a-secure-key" ]; then
+        echo "  ERROR: API key is an insecure default — generate a new one: openssl rand -hex 32"
+        ERRORS=$((ERRORS + 1))
+    else
+        echo "  OK: API key ($KEY_LEN chars)"
+    fi
+else
+    echo "  ERROR: ROUTEROOT_API_KEY not set"
+    ERRORS=$((ERRORS + 1))
 fi
 
 # --- Check port conflicts (53, 80, 443) ---
@@ -139,34 +165,52 @@ else
     echo "  OK: Docker running"
 fi
 
-# --- Check Corefile ---
-if grep -q '{\$ROUTEROOT_DOMAIN' coredns/Corefile 2>/dev/null || ! grep -q "$ROUTEROOT_DOMAIN" coredns/Corefile 2>/dev/null; then
-    echo "  FIXING: Corefile (domain mismatch or env var placeholder)"
-    cat > coredns/Corefile <<EOF
-.:53 {
-    file /etc/coredns/zones/db.${ROUTEROOT_DOMAIN} ${ROUTEROOT_DOMAIN}
+# --- Check Corefile (multi-domain) ---
+COREFILE_OK=true
+for DOMAIN in "${DOMAIN_LIST[@]}"; do
+    DOMAIN=$(echo "$DOMAIN" | tr -d ' ')
+    if ! grep -q "$DOMAIN" coredns/Corefile 2>/dev/null; then
+        COREFILE_OK=false
+        break
+    fi
+done
+
+if [ "$COREFILE_OK" = false ] || grep -q '{\$ROUTEROOT_DOMAIN' coredns/Corefile 2>/dev/null; then
+    echo "  FIXING: Corefile (regenerating for ${#DOMAIN_LIST[@]} domain(s))"
+    # Build Corefile with a block per domain
+    COREFILE_CONTENT=""
+    for DOMAIN in "${DOMAIN_LIST[@]}"; do
+        DOMAIN=$(echo "$DOMAIN" | tr -d ' ')
+        COREFILE_CONTENT="${COREFILE_CONTENT}.:53 {
+    file /etc/coredns/zones/db.${DOMAIN} ${DOMAIN}
     reload 5s
     log
     errors
     health :8054
     ready :8055
 }
-EOF
-    echo "  FIXED: Corefile for $ROUTEROOT_DOMAIN"
+
+"
+    done
+    echo "$COREFILE_CONTENT" > coredns/Corefile
+    echo "  FIXED: Corefile for domains: $DOMAINS"
     FIXES=$((FIXES + 1))
 else
     echo "  OK: Corefile"
 fi
 
-# --- Check zone file ---
-if [ ! -f "coredns/zones/db.${ROUTEROOT_DOMAIN}" ]; then
-    echo "  FIXING: Zone file missing"
-    mkdir -p coredns/zones
-    cat > "coredns/zones/db.${ROUTEROOT_DOMAIN}" <<EOF
-\$ORIGIN ${ROUTEROOT_DOMAIN}.
+# --- Check zone files (one per domain) ---
+for DOMAIN in "${DOMAIN_LIST[@]}"; do
+    DOMAIN=$(echo "$DOMAIN" | tr -d ' ')
+    ZONE_FILE="coredns/zones/db.${DOMAIN}"
+    if [ ! -f "$ZONE_FILE" ]; then
+        echo "  FIXING: Zone file missing for $DOMAIN"
+        mkdir -p coredns/zones
+        cat > "$ZONE_FILE" <<EOF
+\$ORIGIN ${DOMAIN}.
 \$TTL 300
 
-@       IN SOA  ns1.${ROUTEROOT_DOMAIN}. admin.${ROUTEROOT_DOMAIN}. (
+@       IN SOA  ns1.${DOMAIN}. admin.${DOMAIN}. (
                 $(date +%Y%m%d%H)  ; serial
                 3600        ; refresh
                 900         ; retry
@@ -174,8 +218,8 @@ if [ ! -f "coredns/zones/db.${ROUTEROOT_DOMAIN}" ]; then
                 300         ; minimum TTL
 )
 
-@       IN NS   ns1.${ROUTEROOT_DOMAIN}.
-@       IN NS   ns2.${ROUTEROOT_DOMAIN}.
+@       IN NS   ns1.${DOMAIN}.
+@       IN NS   ns2.${DOMAIN}.
 
 ns1     IN A    ${ROUTEROOT_SERVER_IP}
 ns2     IN A    ${ROUTEROOT_SERVER_IP}
@@ -184,19 +228,20 @@ ns2     IN A    ${ROUTEROOT_SERVER_IP}
 
 *       IN A    ${ROUTEROOT_SERVER_IP}
 EOF
-    echo "  FIXED: Zone file created"
-    FIXES=$((FIXES + 1))
-else
-    # Check zone file has correct IP
-    if grep -q "IN A.*:" "coredns/zones/db.${ROUTEROOT_DOMAIN}" 2>/dev/null; then
-        echo "  FIXING: Zone file has IPv6 in A records"
-        sed -i "s/IN A    .*/IN A    ${ROUTEROOT_SERVER_IP}/g" "coredns/zones/db.${ROUTEROOT_DOMAIN}"
-        echo "  FIXED: Zone IPs updated"
+        echo "  FIXED: Zone file created for $DOMAIN"
         FIXES=$((FIXES + 1))
     else
-        echo "  OK: Zone file"
+        # Check zone file has correct IP (not IPv6 in A records)
+        if grep -q "IN A.*:" "$ZONE_FILE" 2>/dev/null; then
+            echo "  FIXING: Zone file for $DOMAIN has IPv6 in A records"
+            sed -i "s/IN A    .*/IN A    ${ROUTEROOT_SERVER_IP}/g" "$ZONE_FILE"
+            echo "  FIXED: Zone IPs updated for $DOMAIN"
+            FIXES=$((FIXES + 1))
+        else
+            echo "  OK: Zone file ($DOMAIN)"
+        fi
     fi
-fi
+done
 
 # --- Check data dir ---
 if [ ! -d data ]; then

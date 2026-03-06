@@ -82,7 +82,11 @@ enum Commands {
     /// Check system health
     Health,
     /// Show setup instructions for connecting Claude Code, CLI, and webhooks
-    Setup,
+    Setup {
+        /// Automatically configure MCP server in ~/.claude/mcp.json
+        #[arg(long)]
+        configure_mcp: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -149,6 +153,8 @@ struct DnsRecord {
 struct HealthResponse {
     status: String,
     domain: String,
+    #[serde(default)]
+    domains: Vec<String>,
     active_deployments: usize,
 }
 
@@ -429,36 +435,97 @@ fn main() {
                 Ok(h) => {
                     println!("Status:      {}", h.status);
                     println!("Domain:      {}", h.domain);
+                    if !h.domains.is_empty() {
+                        println!("Domains:     {}", h.domains.join(", "));
+                    }
                     println!("Deployments: {}", h.active_deployments);
                 }
                 Err(e) => eprintln!("Error: {e}"),
             }
         }
 
-        Commands::Setup => {
+        Commands::Setup { configure_mcp } => {
+            // Try to detect the domain from health endpoint
+            let domain_hint = api_get::<HealthResponse>(&client, &format!("{base}/api/health"), "")
+                .ok()
+                .map(|h| h.domain)
+                .unwrap_or_else(|| "YOUR_DOMAIN".into());
+            let api_url_hint = if base.contains("localhost") || base.contains("127.0.0.1") {
+                format!("https://api.{domain_hint}")
+            } else {
+                base.to_string()
+            };
+
             println!("RouteRoot Setup Guide");
             println!("=====================");
             println!();
             println!("1. CONNECT CLI");
-            println!("   export ROUTEROOT_URL=http://YOUR_SERVER:8053");
+            println!("   export ROUTEROOT_URL={api_url_hint}");
             println!("   export ROUTEROOT_API_KEY=YOUR_API_KEY");
             println!("   routeroot health");
             println!();
             println!("2. CONNECT CLAUDE CODE (MCP)");
             println!("   Build:  cargo install --path mcp-server");
+            println!();
             println!("   Add to ~/.claude/mcp.json:");
             println!("   {{");
             println!("     \"mcpServers\": {{");
             println!("       \"routeroot\": {{");
             println!("         \"command\": \"routeroot-mcp\",");
             println!("         \"env\": {{");
-            println!("           \"ROUTEROOT_URL\": \"http://YOUR_SERVER:8053\",");
+            println!("           \"ROUTEROOT_URL\": \"{api_url_hint}\",");
             println!("           \"ROUTEROOT_API_KEY\": \"YOUR_API_KEY\"");
             println!("         }}");
             println!("       }}");
             println!("     }}");
             println!("   }}");
-            println!("   Restart Claude Code — 15 tools become available.");
+            println!();
+
+            // Auto-configure MCP if requested
+            let mcp_path = dirs_next::home_dir()
+                .map(|h| h.join(".claude").join("mcp.json"));
+            if configure_mcp {
+                if let Some(ref path) = mcp_path {
+                    let mcp_result = configure_mcp_json(path, &api_url_hint, &cli.key);
+                    match mcp_result {
+                        Ok(created) => {
+                            if created {
+                                println!("   MCP configured! Created ~/.claude/mcp.json with RouteRoot server.");
+                            } else {
+                                println!("   MCP configured! Updated ~/.claude/mcp.json with RouteRoot server.");
+                            }
+                            println!("   Restart Claude Code to activate 15 RouteRoot tools.");
+                        }
+                        Err(e) => {
+                            println!("   Failed to configure MCP: {e}");
+                            println!("   Manually create the file above.");
+                        }
+                    }
+                }
+            } else if let Some(ref path) = mcp_path {
+                if path.exists() {
+                    // Check if routeroot is already configured
+                    let has_routeroot = std::fs::read_to_string(path)
+                        .ok()
+                        .map(|c| c.contains("routeroot"))
+                        .unwrap_or(false);
+                    if has_routeroot {
+                        println!("   Detected: MCP already configured in ~/.claude/mcp.json");
+                    } else {
+                        println!("   Detected: ~/.claude/mcp.json exists (RouteRoot not yet added)");
+                        println!("   Run with --configure-mcp to auto-add the RouteRoot MCP server.");
+                    }
+                } else {
+                    println!("   Note: ~/.claude/mcp.json not found.");
+                    println!("   Run with --configure-mcp to create it, or create manually.");
+                }
+            }
+            println!();
+            println!("   Restart Claude Code — 15 tools become available:");
+            println!("   deploy_preview, list_deployments, get_deployment, teardown,");
+            println!("   get_logs, create_dns_record, list_dns_records, delete_dns_record,");
+            println!("   health, promote, plan_deploy, apply_plan,");
+            println!("   map_custom_domain, list_custom_domains, delete_custom_domain");
             println!();
             println!("3. DEPLOY YOUR FIRST BRANCH");
             println!("   routeroot deploy https://github.com/user/repo --branch main");
@@ -466,15 +533,15 @@ fn main() {
             println!();
             println!("4. CUSTOM DOMAINS");
             println!("   routeroot domain map app.client.com my-deployment");
-            println!("   Then add a CNAME at client.com's DNS: app -> my-deployment.yourdomain");
+            println!("   Then add a CNAME at client.com's DNS: app -> my-deployment.{domain_hint}");
             println!();
             println!("5. PATH ROUTING");
             println!("   routeroot deploy https://github.com/user/repo --path-prefix client/staging");
-            println!("   => https://yourdomain.dev/client/staging");
+            println!("   => https://{domain_hint}/client/staging");
             println!();
             println!("6. GITHUB WEBHOOKS");
             println!("   Repo Settings -> Webhooks -> Add:");
-            println!("   URL: http://YOUR_SERVER:8053/api/webhook/github");
+            println!("   URL: {api_url_hint}/api/webhook/github");
             println!("   Content type: application/json");
             println!("   Events: Push");
             println!();
@@ -482,7 +549,7 @@ fn main() {
             println!("   routeroot promote my-app staging");
             println!("   routeroot promote my-app production");
             println!();
-            println!("Full docs: https://github.com/Henrixbor/routeroot");
+            println!("Full docs: https://github.com/Vibeyard/AgentDNS");
         }
     }
 }
@@ -499,6 +566,40 @@ fn api_get<T: serde::de::DeserializeOwned>(client: &reqwest::blocking::Client, u
         return Err(format!("{status}: {body}"));
     }
     resp.json().map_err(|e| format!("invalid response: {e}"))
+}
+
+/// Configure MCP server in ~/.claude/mcp.json. Returns Ok(true) if file was created, Ok(false) if updated.
+fn configure_mcp_json(path: &std::path::Path, api_url: &str, api_key: &str) -> Result<bool, String> {
+    // Ensure parent dir exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
+    }
+
+    let (mut config, created) = if path.exists() {
+        let content = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
+        let parsed: serde_json::Value = serde_json::from_str(&content).map_err(|e| format!("parse: {e}"))?;
+        (parsed, false)
+    } else {
+        (serde_json::json!({}), true)
+    };
+
+    // Ensure mcpServers object exists
+    if config.get("mcpServers").is_none() {
+        config["mcpServers"] = serde_json::json!({});
+    }
+
+    // Add/update routeroot entry
+    config["mcpServers"]["routeroot"] = serde_json::json!({
+        "command": "routeroot-mcp",
+        "env": {
+            "ROUTEROOT_URL": api_url,
+            "ROUTEROOT_API_KEY": api_key
+        }
+    });
+
+    let output = serde_json::to_string_pretty(&config).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(path, output).map_err(|e| format!("write: {e}"))?;
+    Ok(created)
 }
 
 fn api_post<T: serde::de::DeserializeOwned>(client: &reqwest::blocking::Client, url: &str, auth: &str, body: &serde_json::Value) -> Result<T, String> {

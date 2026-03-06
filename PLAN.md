@@ -198,9 +198,12 @@ All via environment variables:
 
 ```env
 # Required
-ROUTEROOT_DOMAIN=routeroot.dev         # Your domain
-ROUTEROOT_SERVER_IP=51.178.209.71     # Server public IP (must match DNS zone A records)
-ROUTEROOT_API_KEY=<random-secret>     # API auth
+ROUTEROOT_DOMAIN=routeroot.dev         # Primary domain
+ROUTEROOT_SERVER_IP=YOUR_SERVER_IP     # Server public IP (must match DNS zone A records)
+ROUTEROOT_API_KEY=<random-secret>      # API auth (min 16 chars, rejects insecure defaults)
+
+# Multi-domain (optional)
+ROUTEROOT_DOMAINS=routeroot.dev,vibeyard.io  # Comma-separated list of all domains
 
 # Optional
 ROUTEROOT_MAX_DEPLOYMENTS=20          # Concurrent deployment limit
@@ -209,11 +212,12 @@ ROUTEROOT_MAX_MEMORY=2048             # MB per container
 ROUTEROOT_MAX_CPUS=2                  # CPUs per container
 ROUTEROOT_GITHUB_WEBHOOK_SECRET=...   # For auto-deploy on push
 ROUTEROOT_LOG_FORMAT=human            # Set to 'json' for structured logging
+ROUTEROOT_ALLOWED_REPO_HOSTS=github.com,gitlab.com,bitbucket.org  # Allowed git hosts
 
 # Internal (set by docker-compose.yml)
 ROUTEROOT_CADDY_ADMIN=http://caddy:2019  # Caddy JSON admin API
 DATABASE_PATH=/data/routeroot.db          # SQLite DB path inside container
-ZONE_FILE_PATH=/dns-zones/db.domain       # CoreDNS zone file path inside container
+ZONE_FILE_DIR=/dns-zones                  # CoreDNS zone file directory (one per domain)
 ```
 
 ## Build Detection
@@ -248,6 +252,8 @@ The builder auto-detects how to build a repo:
 - [x] Audit log on all mutations
 - [x] Deployment verification (DNS + HTTP health checks)
 - [x] On-demand TLS via Caddy JSON API config
+- [x] Multi-domain support (per-domain zone files, Caddy TLS policies, routes)
+- [x] Security hardening (constant-time auth, repo allowlist, zone injection prevention, CORS, container hardening, internal error masking, network isolation)
 
 ### Phase 2: CLI + MCP + Webhooks -- COMPLETE
 - [x] CLI tool wrapping the API (deploy, ls, status, logs, down, plan, apply, promote, record, domain, audit, health, setup)
@@ -326,15 +332,24 @@ The control plane is the only one running CoreDNS (authoritative DNS).
 ## Server Requirements
 
 - Linux server with Docker installed
-- Ports open: 53 (DNS), 80 (HTTP), 443 (HTTPS), 8053 (API)
+- Ports open: 53 (DNS), 80 (HTTP), 443 (HTTPS)
 - A domain with NS records pointing to this server
 - ~2GB RAM minimum for the platform itself, plus resources for deployments
 
-## Security (Dev-Grade)
+Note: Port 8053 (API) is NOT opened externally — it's localhost-only. External API access goes through Caddy at `https://api.yourdomain`.
 
-- API key auth on all endpoints (Bearer token)
-- Container resource limits (memory, CPU, no privileged mode)
-- No host networking for deployed containers
-- Rate limiting on deploy endpoint
-- Webhook signature verification for GitHub
-- Not designed for hostile multi-tenant use — this is team infrastructure
+## Security
+
+- **API key required** — Min 16 chars, rejects known defaults (`dev-key`, `change-me`, etc.)
+- **Constant-time auth** — HMAC-based key comparison prevents timing attacks
+- **Repo URL allowlist** — Only HTTPS repos from configured hosts
+- **DNS zone injection prevention** — Record names/types/values validated against metacharacters
+- **Protected DNS records** — NS, SOA, CAA cannot be created/deleted via API
+- **TLS cert scoping** — Only issues certs for subdomains with active deployments
+- **API port localhost-only** — Port 8053 bound to `127.0.0.1`; external access via Caddy HTTPS
+- **Internal Docker network** — Caddy admin API not exposed outside internal bridge
+- **CORS restricted** — Only managed domain origins allowed
+- **Container hardening** — `no-new-privileges`, PID limits, memory/CPU limits, empty binds, tmpfs /tmp
+- **Internal error masking** — Real errors logged server-side, generic messages to clients
+- **Audit log** — All mutations logged
+- **Webhook signature verification** — GitHub HMAC-SHA256
