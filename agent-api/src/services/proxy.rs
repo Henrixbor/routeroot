@@ -230,8 +230,9 @@ impl ProxyService {
             }
         });
 
-        let url = format!("{}/config/", self.admin_url);
-        let resp = self.client.put(&url)
+        // Use /load endpoint to replace entire Caddy config (POST, not PUT)
+        let url = format!("{}/load", self.admin_url);
+        let resp = self.client.post(&url)
             .json(&config)
             .send()
             .await
