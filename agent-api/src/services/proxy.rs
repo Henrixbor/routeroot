@@ -149,6 +149,36 @@ impl ProxyService {
         Ok(())
     }
 
+    /// Patch the Caddyfile's wildcard route to non-terminal so dynamic routes can match
+    pub async fn patch_wildcard_non_terminal(&self) -> Result<(), AppError> {
+        let url = format!("{}/config/apps/http/servers/srv0/routes", self.admin_url);
+        let resp = self.client.get(&url).send().await
+            .map_err(|e| AppError::Internal(format!("caddy admin request failed: {e}")))?;
+        let routes: Vec<serde_json::Value> = resp.json().await
+            .map_err(|e| AppError::Internal(format!("failed to parse routes: {e}")))?;
+
+        for (i, route) in routes.iter().enumerate() {
+            let hosts = route.get("match")
+                .and_then(|m| m.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|m| m.get("host"))
+                .and_then(|h| h.as_array());
+            let is_wildcard = hosts.map_or(false, |h| h.iter().any(|v| v.as_str().map_or(false, |s| s.starts_with("*."))));
+            let is_terminal = route.get("terminal").and_then(|t| t.as_bool()).unwrap_or(false);
+
+            if is_wildcard && is_terminal {
+                let patch_url = format!("{}/config/apps/http/servers/srv0/routes/{}/terminal", self.admin_url, i);
+                self.client.patch(&patch_url)
+                    .json(&false)
+                    .send()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("failed to patch wildcard: {e}")))?;
+                tracing::info!("Patched wildcard route at index {} to non-terminal", i);
+            }
+        }
+        Ok(())
+    }
+
     /// Remove a route by subdomain
     pub async fn remove_route(&self, subdomain: &str) -> Result<(), AppError> {
         let route_id = format!("routeroot-{subdomain}");

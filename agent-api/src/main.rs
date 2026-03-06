@@ -64,6 +64,18 @@ async fn main() -> anyhow::Result<()> {
         services::cleanup::run_cleanup_loop(cleanup_state).await;
     });
 
+    // Patch Caddy wildcard route to non-terminal so dynamic routes match first
+    tokio::spawn({
+        let proxy = services::proxy::ProxyService::new(&state.config.caddy_admin_url);
+        async move {
+            // Wait for Caddy to be ready
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            if let Err(e) = proxy.patch_wildcard_non_terminal().await {
+                tracing::warn!("Failed to patch wildcard route: {e}");
+            }
+        }
+    });
+
     let app = Router::new()
         .nest("/api", routes::api_router(state.clone()))
         .layer(TraceLayer::new_for_http())
