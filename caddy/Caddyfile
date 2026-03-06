@@ -14,3 +14,11 @@
 api.{$ROUTEROOT_DOMAIN:routeroot.dev} {
     reverse_proxy agent-api:8053
 }
+
+# Wildcard — on-demand TLS for deployment subdomains
+# No handler: falls through so admin API routes handle requests
+*.{$ROUTEROOT_DOMAIN:routeroot.dev} {
+    tls {
+        on_demand
+    }
+}
