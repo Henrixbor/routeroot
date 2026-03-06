@@ -11,7 +11,7 @@ services:
     environment:
       - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-routeroot.dev}
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8054/health"]
+      test: ["CMD", "sh", "-c", "echo | nc -w1 localhost 53"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -30,7 +30,7 @@ services:
     environment:
       - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-routeroot.dev}
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2019/config/"]
+      test: ["CMD", "sh", "-c", "echo | nc -w1 localhost 2019"]
       interval: 15s
       timeout: 5s
       retries: 3
