@@ -10,12 +10,6 @@ services:
       - ./coredns/zones:/etc/coredns/zones
     environment:
       - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-routeroot.dev}
-    healthcheck:
-      test: ["CMD", "sh", "-c", "echo | nc -w1 localhost 53"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
     restart: always
 
   caddy:
@@ -29,12 +23,6 @@ services:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     environment:
       - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-routeroot.dev}
-    healthcheck:
-      test: ["CMD", "sh", "-c", "echo | nc -w1 localhost 2019"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
     restart: always
 
   agent-api:
@@ -59,10 +47,8 @@ services:
       - DATABASE_PATH=/data/agentdns.db
       - ZONE_FILE_PATH=/dns-zones/db.${AGENTDNS_DOMAIN:-routeroot.dev}
     depends_on:
-      coredns:
-        condition: service_healthy
-      caddy:
-        condition: service_healthy
+      - coredns
+      - caddy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8053/api/health"]
       interval: 15s
