@@ -9,7 +9,7 @@ services:
       - ./coredns/Corefile:/etc/coredns/Corefile:ro
       - ./coredns/zones:/etc/coredns/zones
     environment:
-      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-routeroot.dev}
+      - ROUTEROOT_DOMAIN=${ROUTEROOT_DOMAIN:-routeroot.dev}
     restart: always
 
   caddy:
@@ -22,7 +22,7 @@ services:
       - caddy_config:/config
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     environment:
-      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-routeroot.dev}
+      - ROUTEROOT_DOMAIN=${ROUTEROOT_DOMAIN:-routeroot.dev}
     restart: always
 
   agent-api:
@@ -34,18 +34,18 @@ services:
       - ./coredns/zones:/dns-zones
       - ./data:/data
     environment:
-      - AGENTDNS_DOMAIN=${AGENTDNS_DOMAIN:-routeroot.dev}
-      - AGENTDNS_SERVER_IP=${AGENTDNS_SERVER_IP}
-      - AGENTDNS_API_KEY=${AGENTDNS_API_KEY}
-      - AGENTDNS_MAX_DEPLOYMENTS=${AGENTDNS_MAX_DEPLOYMENTS:-20}
-      - AGENTDNS_DEFAULT_TTL=${AGENTDNS_DEFAULT_TTL:-48h}
-      - AGENTDNS_MAX_MEMORY=${AGENTDNS_MAX_MEMORY:-2048}
-      - AGENTDNS_MAX_CPUS=${AGENTDNS_MAX_CPUS:-2}
-      - AGENTDNS_CADDY_ADMIN=http://caddy:2019
-      - AGENTDNS_GITHUB_WEBHOOK_SECRET=${AGENTDNS_GITHUB_WEBHOOK_SECRET:-}
-      - AGENTDNS_LOG_FORMAT=${AGENTDNS_LOG_FORMAT:-human}
-      - DATABASE_PATH=/data/agentdns.db
-      - ZONE_FILE_PATH=/dns-zones/db.${AGENTDNS_DOMAIN:-routeroot.dev}
+      - ROUTEROOT_DOMAIN=${ROUTEROOT_DOMAIN:-routeroot.dev}
+      - ROUTEROOT_SERVER_IP=${ROUTEROOT_SERVER_IP}
+      - ROUTEROOT_API_KEY=${ROUTEROOT_API_KEY}
+      - ROUTEROOT_MAX_DEPLOYMENTS=${ROUTEROOT_MAX_DEPLOYMENTS:-20}
+      - ROUTEROOT_DEFAULT_TTL=${ROUTEROOT_DEFAULT_TTL:-48h}
+      - ROUTEROOT_MAX_MEMORY=${ROUTEROOT_MAX_MEMORY:-2048}
+      - ROUTEROOT_MAX_CPUS=${ROUTEROOT_MAX_CPUS:-2}
+      - ROUTEROOT_CADDY_ADMIN=http://caddy:2019
+      - ROUTEROOT_GITHUB_WEBHOOK_SECRET=${ROUTEROOT_GITHUB_WEBHOOK_SECRET:-}
+      - ROUTEROOT_LOG_FORMAT=${ROUTEROOT_LOG_FORMAT:-human}
+      - DATABASE_PATH=/data/routeroot.db
+      - ZONE_FILE_PATH=/dns-zones/db.${ROUTEROOT_DOMAIN:-routeroot.dev}
     depends_on:
       - coredns
       - caddy

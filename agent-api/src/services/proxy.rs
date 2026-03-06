@@ -19,7 +19,7 @@ impl ProxyService {
     /// Register a route: subdomain.domain → localhost:port
     pub async fn add_route(&self, subdomain: &str, domain: &str, target_port: u16) -> Result<(), AppError> {
         let host = format!("{subdomain}.{domain}");
-        let route_id = format!("agentdns-{subdomain}");
+        let route_id = format!("routeroot-{subdomain}");
 
         let route = json!({
             "@id": route_id,
@@ -50,7 +50,7 @@ impl ProxyService {
 
     /// Register a custom domain route: customdomain.com → localhost:port
     pub async fn add_custom_domain_route(&self, custom_domain: &str, target_port: u16) -> Result<(), AppError> {
-        let route_id = format!("agentdns-custom-{}", custom_domain.replace('.', "-"));
+        let route_id = format!("routeroot-custom-{}", custom_domain.replace('.', "-"));
 
         let route = json!({
             "@id": route_id,
@@ -81,7 +81,7 @@ impl ProxyService {
 
     /// Remove a custom domain route
     pub async fn remove_custom_domain_route(&self, custom_domain: &str) -> Result<(), AppError> {
-        let route_id = format!("agentdns-custom-{}", custom_domain.replace('.', "-"));
+        let route_id = format!("routeroot-custom-{}", custom_domain.replace('.', "-"));
         let url = format!("{}/id/{route_id}", self.admin_url);
 
         self.client
@@ -96,7 +96,7 @@ impl ProxyService {
 
     /// Register a path-based route: domain/path/* → localhost:port
     pub async fn add_path_route(&self, path_prefix: &str, domain: &str, target_port: u16) -> Result<(), AppError> {
-        let route_id = format!("agentdns-path-{}", path_prefix.replace('/', "-"));
+        let route_id = format!("routeroot-path-{}", path_prefix.replace('/', "-"));
 
         let route = json!({
             "@id": route_id,
@@ -136,7 +136,7 @@ impl ProxyService {
 
     /// Remove a path-based route
     pub async fn remove_path_route(&self, path_prefix: &str) -> Result<(), AppError> {
-        let route_id = format!("agentdns-path-{}", path_prefix.replace('/', "-"));
+        let route_id = format!("routeroot-path-{}", path_prefix.replace('/', "-"));
         let url = format!("{}/id/{route_id}", self.admin_url);
 
         self.client
@@ -151,7 +151,7 @@ impl ProxyService {
 
     /// Remove a route by subdomain
     pub async fn remove_route(&self, subdomain: &str) -> Result<(), AppError> {
-        let route_id = format!("agentdns-{subdomain}");
+        let route_id = format!("routeroot-{subdomain}");
         let url = format!("{}/id/{route_id}", self.admin_url);
 
         self.client

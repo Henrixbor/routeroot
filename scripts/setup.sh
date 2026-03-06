@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# AgentDNS — Rock-solid one-command setup
+# RouteRoot — Rock-solid one-command setup
 #
 # Interactive:     sudo bash scripts/setup.sh
 # Non-interactive: sudo bash scripts/setup.sh routeroot.dev
@@ -11,8 +11,8 @@ set -euo pipefail
 # Idempotent — safe to re-run. Preserves existing API key on re-run.
 
 REPO_URL="https://github.com/Henrixbor/routeroot.git"
-INSTALL_DIR="/opt/agentdns"
-LOG="/var/log/agentdns-setup.log"
+INSTALL_DIR="/opt/routeroot"
+LOG="/var/log/routeroot-setup.log"
 REQUIRED_DISK_MB=5000
 
 # --- Logging ---
@@ -21,7 +21,7 @@ fail() { echo ""; echo "  FAIL: $1"; echo "$(date -Iseconds) FAIL: $1" >> "$LOG"
 
 echo ""
 echo "  ╔═══════════════════════════════════════╗"
-echo "  ║         AgentDNS Setup                ║"
+echo "  ║         RouteRoot Setup                ║"
 echo "  ║   Self-hosted deploy platform         ║"
 echo "  ╚═══════════════════════════════════════╝"
 echo ""
@@ -77,7 +77,7 @@ fi
 
 # --- Preserve existing API key on re-run ---
 if [ -z "$API_KEY" ] && [ -f "$INSTALL_DIR/.env" ]; then
-    API_KEY=$(grep '^AGENTDNS_API_KEY=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || true)
+    API_KEY=$(grep '^ROUTEROOT_API_KEY=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || true)
     if [ -n "$API_KEY" ]; then
         echo "  (Preserving existing API key)"
     fi
@@ -116,7 +116,7 @@ if [ "$AVAIL_MB" -lt "$REQUIRED_DISK_MB" ]; then
     echo "  Trying to free space..."
     apt-get clean 2>/dev/null || true
     docker system prune -f 2>/dev/null || true
-    rm -rf /tmp/agentdns-builds 2>/dev/null || true
+    rm -rf /tmp/routeroot-builds 2>/dev/null || true
     AVAIL_MB=$(df / --output=avail 2>/dev/null | tail -1 | tr -d ' ' || echo "999999")
     AVAIL_MB=$((AVAIL_MB / 1024))
     if [ "$AVAIL_MB" -lt "$REQUIRED_DISK_MB" ]; then
@@ -156,7 +156,7 @@ free_port() {
                 systemctl stop systemd-resolved 2>/dev/null || true
                 systemctl disable systemd-resolved 2>/dev/null || true
                 # Backup and replace resolv.conf
-                [ ! -f /etc/resolv.conf.pre-agentdns ] && cp /etc/resolv.conf /etc/resolv.conf.pre-agentdns 2>/dev/null || true
+                [ ! -f /etc/resolv.conf.pre-routeroot ] && cp /etc/resolv.conf /etc/resolv.conf.pre-routeroot 2>/dev/null || true
                 rm -f /etc/resolv.conf  # may be a symlink
                 printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > /etc/resolv.conf
                 ;;
@@ -259,14 +259,14 @@ echo "[5/7] Writing config..."
 mkdir -p data coredns/zones
 
 cat > .env <<EOF
-AGENTDNS_DOMAIN=$DOMAIN
-AGENTDNS_SERVER_IP=$SERVER_IP
-AGENTDNS_API_KEY=$API_KEY
-AGENTDNS_MAX_DEPLOYMENTS=20
-AGENTDNS_DEFAULT_TTL=48h
-AGENTDNS_MAX_MEMORY=2048
-AGENTDNS_MAX_CPUS=2
-AGENTDNS_LOG_FORMAT=json
+ROUTEROOT_DOMAIN=$DOMAIN
+ROUTEROOT_SERVER_IP=$SERVER_IP
+ROUTEROOT_API_KEY=$API_KEY
+ROUTEROOT_MAX_DEPLOYMENTS=20
+ROUTEROOT_DEFAULT_TTL=48h
+ROUTEROOT_MAX_MEMORY=2048
+ROUTEROOT_MAX_CPUS=2
+ROUTEROOT_LOG_FORMAT=json
 EOF
 
 # Corefile — must have actual domain, CoreDNS doesn't do env var substitution
@@ -359,9 +359,9 @@ fi
 echo ""
 echo "  Installing self-healing..."
 
-cat > /etc/systemd/system/agentdns.service <<EOF
+cat > /etc/systemd/system/routeroot.service <<EOF
 [Unit]
-Description=AgentDNS Deploy Platform
+Description=RouteRoot Deploy Platform
 After=docker.service
 Requires=docker.service
 
@@ -379,10 +379,10 @@ TimeoutStartSec=300
 WantedBy=multi-user.target
 EOF
 
-cat > /usr/local/bin/agentdns-watchdog <<'WATCHDOG'
+cat > /usr/local/bin/routeroot-watchdog <<'WATCHDOG'
 #!/usr/bin/env bash
-INSTALL_DIR="/opt/agentdns"
-LOG="/var/log/agentdns-watchdog.log"
+INSTALL_DIR="/opt/routeroot"
+LOG="/var/log/routeroot-watchdog.log"
 log() { echo "$(date -Iseconds) $1" >> "$LOG"; }
 
 cd "$INSTALL_DIR" || exit 1
@@ -431,11 +431,11 @@ if [ -f "$LOG" ] && [ "$(stat -c%s "$LOG" 2>/dev/null || echo 0)" -gt 1048576 ];
 fi
 WATCHDOG
 
-chmod +x /usr/local/bin/agentdns-watchdog
-(crontab -l 2>/dev/null | grep -v agentdns-watchdog; echo "*/2 * * * * /usr/local/bin/agentdns-watchdog") | crontab -
+chmod +x /usr/local/bin/routeroot-watchdog
+(crontab -l 2>/dev/null | grep -v routeroot-watchdog; echo "*/2 * * * * /usr/local/bin/routeroot-watchdog") | crontab -
 
 systemctl daemon-reload
-systemctl enable agentdns.service 2>/dev/null
+systemctl enable routeroot.service 2>/dev/null
 echo "  Systemd + watchdog installed"
 
 # ============================================================
@@ -450,7 +450,7 @@ for i in $(seq 1 30); do
         HEALTH=$(curl -sf http://localhost:8053/api/health 2>/dev/null || echo "{}")
         echo ""
         echo "  ╔═══════════════════════════════════════════════════╗"
-        echo "  ║              AgentDNS is running!                 ║"
+        echo "  ║              RouteRoot is running!                 ║"
         echo "  ╚═══════════════════════════════════════════════════╝"
         echo ""
         echo "  Domain:     $DOMAIN"

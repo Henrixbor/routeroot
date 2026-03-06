@@ -1,10 +1,10 @@
-# AgentDNS
+# RouteRoot
 
 Self-hosted DNS + deploy platform designed for AI agents. Deploy any git branch as a live URL in under 60 seconds.
 
 ```bash
 # Deploy a branch
-agentdns deploy https://github.com/user/repo --branch feat/login
+routeroot deploy https://github.com/user/repo --branch feat/login
 # => https://repo-feat-login.yourdomain.dev
 
 # Or let an AI agent do it via MCP
@@ -14,7 +14,7 @@ agentdns deploy https://github.com/user/repo --branch feat/login
 
 ## What is this?
 
-AgentDNS is a self-hosted alternative to Vercel/Netlify preview deployments, built API-first for AI agents (Claude Code, Cursor, etc.) to autonomously deploy, verify, and manage live branch previews.
+RouteRoot is a self-hosted alternative to Vercel/Netlify preview deployments, built API-first for AI agents (Claude Code, Cursor, etc.) to autonomously deploy, verify, and manage live branch previews.
 
 **Core loop:** Push code → Agent calls API → Live URL in seconds → Agent verifies → Agent reports back
 
@@ -25,7 +25,7 @@ AgentDNS is a self-hosted alternative to Vercel/Netlify preview deployments, bui
 - **Plan/Apply** — Dry-run deployments before executing (safe for agents)
 - **Promote** — Move preview → staging → production
 - **MCP Server** — 12 tools for Claude Code / any MCP client
-- **CLI** — `agentdns deploy`, `ls`, `logs`, `down`, `promote`, `audit`
+- **CLI** — `routeroot deploy`, `ls`, `logs`, `down`, `promote`, `audit`
 - **GitHub Webhooks** — Auto-deploy on push, auto-teardown on branch delete
 - **DNS Management** — Create/delete DNS records via API (NS/SOA/CAA protected)
 - **Audit Log** — Every mutation logged with actor, action, timestamp
@@ -46,7 +46,7 @@ AgentDNS is a self-hosted alternative to Vercel/Netlify preview deployments, bui
 ```bash
 # On your server (Ubuntu/Debian):
 git clone https://github.com/Henrixbor/routeroot.git
-cd AgentDNS
+cd RouteRoot
 sudo bash scripts/setup.sh
 ```
 
@@ -63,7 +63,7 @@ That's it. The script will:
 
 ```bash
 cp .env.example .env
-# Edit .env: set AGENTDNS_DOMAIN, AGENTDNS_SERVER_IP, AGENTDNS_API_KEY
+# Edit .env: set ROUTEROOT_DOMAIN, ROUTEROOT_SERVER_IP, ROUTEROOT_API_KEY
 docker compose up -d
 curl http://localhost:8053/api/health
 ```
@@ -75,9 +75,9 @@ curl http://localhost:8053/api/health
 cargo install --path cli
 
 # Deploy
-export AGENTDNS_URL=http://your-server:8053
-export AGENTDNS_API_KEY=your-key
-agentdns deploy https://github.com/user/repo --branch main
+export ROUTEROOT_URL=http://your-server:8053
+export ROUTEROOT_API_KEY=your-key
+routeroot deploy https://github.com/user/repo --branch main
 ```
 
 ### 4. Connect AI agents (MCP)
@@ -91,11 +91,11 @@ Add to `~/.claude/mcp.json`:
 ```json
 {
   "mcpServers": {
-    "agentdns": {
-      "command": "agentdns-mcp",
+    "routeroot": {
+      "command": "routeroot-mcp",
       "env": {
-        "AGENTDNS_URL": "http://your-server:8053",
-        "AGENTDNS_API_KEY": "your-key"
+        "ROUTEROOT_URL": "http://your-server:8053",
+        "ROUTEROOT_API_KEY": "your-key"
       }
     }
   }
@@ -196,7 +196,7 @@ curl http://server:8053/api/audit -H "Authorization: Bearer $KEY"
 Set up in your repo: Settings → Webhooks → Add webhook:
 - URL: `http://your-server:8053/api/webhook/github`
 - Content type: `application/json`
-- Secret: your `AGENTDNS_GITHUB_WEBHOOK_SECRET`
+- Secret: your `ROUTEROOT_GITHUB_WEBHOOK_SECRET`
 - Events: Push events
 
 Branches auto-deploy on push, auto-teardown on delete.
@@ -221,37 +221,37 @@ Branches auto-deploy on push, auto-teardown on delete.
 ## CLI Reference
 
 ```
-agentdns deploy <repo> [-b branch] [-n name] [-t ttl] [-e environment]
-agentdns plan <repo> [-b branch] [-n name] [-t ttl]
-agentdns apply <plan_id>
-agentdns plans
-agentdns promote <name> <target>
-agentdns ls
-agentdns status <name>
-agentdns logs <name>
-agentdns down <name>
-agentdns record add <name> [-t type] <value>
-agentdns record ls
-agentdns record rm <name>
-agentdns audit [-l limit]
-agentdns health
+routeroot deploy <repo> [-b branch] [-n name] [-t ttl] [-e environment]
+routeroot plan <repo> [-b branch] [-n name] [-t ttl]
+routeroot apply <plan_id>
+routeroot plans
+routeroot promote <name> <target>
+routeroot ls
+routeroot status <name>
+routeroot logs <name>
+routeroot down <name>
+routeroot record add <name> [-t type] <value>
+routeroot record ls
+routeroot record rm <name>
+routeroot audit [-l limit]
+routeroot health
 ```
 
-Environment variables: `AGENTDNS_URL`, `AGENTDNS_API_KEY`
+Environment variables: `ROUTEROOT_URL`, `ROUTEROOT_API_KEY`
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AGENTDNS_DOMAIN` | `routeroot.dev` | Your domain |
-| `AGENTDNS_SERVER_IP` | `127.0.0.1` | Server public IP |
-| `AGENTDNS_API_KEY` | `dev-key` | API authentication key |
-| `AGENTDNS_MAX_DEPLOYMENTS` | `20` | Max concurrent deployments |
-| `AGENTDNS_DEFAULT_TTL` | `48h` | Default preview expiry |
-| `AGENTDNS_MAX_MEMORY` | `2048` | MB per container |
-| `AGENTDNS_MAX_CPUS` | `2` | CPUs per container |
-| `AGENTDNS_LOG_FORMAT` | (human) | Set to `json` for structured logging |
-| `AGENTDNS_GITHUB_WEBHOOK_SECRET` | (none) | GitHub webhook HMAC secret |
+| `ROUTEROOT_DOMAIN` | `routeroot.dev` | Your domain |
+| `ROUTEROOT_SERVER_IP` | `127.0.0.1` | Server public IP |
+| `ROUTEROOT_API_KEY` | `dev-key` | API authentication key |
+| `ROUTEROOT_MAX_DEPLOYMENTS` | `20` | Max concurrent deployments |
+| `ROUTEROOT_DEFAULT_TTL` | `48h` | Default preview expiry |
+| `ROUTEROOT_MAX_MEMORY` | `2048` | MB per container |
+| `ROUTEROOT_MAX_CPUS` | `2` | CPUs per container |
+| `ROUTEROOT_LOG_FORMAT` | (human) | Set to `json` for structured logging |
+| `ROUTEROOT_GITHUB_WEBHOOK_SECRET` | (none) | GitHub webhook HMAC secret |
 
 ## Architecture
 
@@ -275,7 +275,7 @@ Internet → CoreDNS (:53)  ← authoritative DNS, wildcard *.domain → server 
 ### Multi-server (planned — Phase 3)
 - Control plane stays on one server (API + CoreDNS)
 - Worker nodes (Hetzner/OVH boxes) run Caddy + Docker
-- `agentdns server add --name eu-1 --ip x.x.x.x --region eu`
+- `routeroot server add --name eu-1 --ip x.x.x.x --region eu`
 - API routes deployments to least-loaded worker
 - DNS points subdomains to the specific worker IP
 - Each $5/mo Hetzner box adds ~15-20 more deployment slots

@@ -42,13 +42,13 @@ impl DockerService {
             ..Default::default()
         };
 
-        let container_name = format!("agentdns-{name}");
+        let container_name = format!("routeroot-{name}");
         let config = Config {
             image: Some(image.to_string()),
             host_config: Some(host_config),
             labels: Some(HashMap::from([
-                ("agentdns".into(), "true".into()),
-                ("agentdns.name".into(), name.into()),
+                ("routeroot".into(), "true".into()),
+                ("routeroot.name".into(), name.into()),
             ])),
             ..Default::default()
         };

@@ -5,7 +5,7 @@ use crate::error::AppError;
 /// Clone a repo and build a Docker image for it.
 /// Captures and returns build output for debugging.
 pub async fn clone_and_build(repo: &str, branch: &str, name: &str) -> Result<(String, u16), AppError> {
-    let work_dir = PathBuf::from("/tmp/agentdns-builds").join(name);
+    let work_dir = PathBuf::from("/tmp/routeroot-builds").join(name);
 
     // Clean up any previous build
     if work_dir.exists() {
@@ -45,7 +45,7 @@ pub async fn clone_and_build(repo: &str, branch: &str, name: &str) -> Result<(St
     }
 
     // Build Docker image — capture output
-    let image_tag = format!("agentdns-{name}:latest");
+    let image_tag = format!("routeroot-{name}:latest");
     tracing::info!(image = %image_tag, "building docker image");
     let build_output = Command::new("docker")
         .args(["build", "-t", &image_tag, "."])

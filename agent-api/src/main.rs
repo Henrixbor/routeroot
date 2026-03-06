@@ -23,7 +23,7 @@ pub struct AppState {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // JSON structured logging for agent-parseable output
-    let json_logging = std::env::var("AGENTDNS_LOG_FORMAT").unwrap_or_default() == "json";
+    let json_logging = std::env::var("ROUTEROOT_LOG_FORMAT").unwrap_or_default() == "json";
 
     if json_logging {
         tracing_subscriber::fmt()
@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
         server_ip = %config.server_ip,
         max_deployments = config.max_deployments,
         max_memory_mb = config.max_memory_mb,
-        "AgentDNS starting"
+        "RouteRoot starting"
     );
 
     let db = db::Database::new(&config.database_path)?;
@@ -70,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(CorsLayer::permissive());
 
     let addr = "0.0.0.0:8053";
-    tracing::info!("AgentDNS API listening on {addr}");
+    tracing::info!("RouteRoot API listening on {addr}");
     let listener = TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 

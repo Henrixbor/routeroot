@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# AgentDNS Doctor — diagnose and auto-fix everything
+# RouteRoot Doctor — diagnose and auto-fix everything
 # Usage: sudo bash scripts/doctor.sh
 
-INSTALL_DIR="${AGENTDNS_DIR:-/opt/agentdns}"
+INSTALL_DIR="${ROUTEROOT_DIR:-/opt/routeroot}"
 FIXES=0
 ERRORS=0
 
 echo ""
-echo "  AgentDNS Doctor"
+echo "  RouteRoot Doctor"
 echo "  ==============="
 echo ""
 
@@ -27,18 +27,18 @@ if [ ! -f .env ]; then
     exit 1
 fi
 source .env 2>/dev/null || { echo "  FAIL: .env is malformed"; exit 1; }
-echo "  OK: .env (domain=$AGENTDNS_DOMAIN, ip=$AGENTDNS_SERVER_IP)"
+echo "  OK: .env (domain=$ROUTEROOT_DOMAIN, ip=$ROUTEROOT_SERVER_IP)"
 
 # --- Check .env has IPv4 not IPv6 ---
-if echo "$AGENTDNS_SERVER_IP" | grep -q ":"; then
+if echo "$ROUTEROOT_SERVER_IP" | grep -q ":"; then
     REAL_IP=$(curl -4 -sf --max-time 5 ifconfig.me 2>/dev/null \
            || curl -4 -sf --max-time 5 icanhazip.com 2>/dev/null \
            || ip -4 addr show 2>/dev/null | grep 'scope global' | grep -oP 'inet \K[\d.]+' | head -1 \
            || echo "")
     if [ -n "$REAL_IP" ]; then
-        echo "  FIXING: .env has IPv6 ($AGENTDNS_SERVER_IP) -> IPv4 ($REAL_IP)"
-        sed -i "s/AGENTDNS_SERVER_IP=.*/AGENTDNS_SERVER_IP=$REAL_IP/" .env
-        AGENTDNS_SERVER_IP="$REAL_IP"
+        echo "  FIXING: .env has IPv6 ($ROUTEROOT_SERVER_IP) -> IPv4 ($REAL_IP)"
+        sed -i "s/ROUTEROOT_SERVER_IP=.*/ROUTEROOT_SERVER_IP=$REAL_IP/" .env
+        ROUTEROOT_SERVER_IP="$REAL_IP"
         FIXES=$((FIXES + 1))
     else
         echo "  ERROR: .env has IPv6 but can't detect IPv4"
@@ -140,11 +140,11 @@ else
 fi
 
 # --- Check Corefile ---
-if grep -q '{\$AGENTDNS_DOMAIN' coredns/Corefile 2>/dev/null || ! grep -q "$AGENTDNS_DOMAIN" coredns/Corefile 2>/dev/null; then
+if grep -q '{\$ROUTEROOT_DOMAIN' coredns/Corefile 2>/dev/null || ! grep -q "$ROUTEROOT_DOMAIN" coredns/Corefile 2>/dev/null; then
     echo "  FIXING: Corefile (domain mismatch or env var placeholder)"
     cat > coredns/Corefile <<EOF
 .:53 {
-    file /etc/coredns/zones/db.${AGENTDNS_DOMAIN} ${AGENTDNS_DOMAIN}
+    file /etc/coredns/zones/db.${ROUTEROOT_DOMAIN} ${ROUTEROOT_DOMAIN}
     reload 5s
     log
     errors
@@ -152,21 +152,21 @@ if grep -q '{\$AGENTDNS_DOMAIN' coredns/Corefile 2>/dev/null || ! grep -q "$AGEN
     ready :8055
 }
 EOF
-    echo "  FIXED: Corefile for $AGENTDNS_DOMAIN"
+    echo "  FIXED: Corefile for $ROUTEROOT_DOMAIN"
     FIXES=$((FIXES + 1))
 else
     echo "  OK: Corefile"
 fi
 
 # --- Check zone file ---
-if [ ! -f "coredns/zones/db.${AGENTDNS_DOMAIN}" ]; then
+if [ ! -f "coredns/zones/db.${ROUTEROOT_DOMAIN}" ]; then
     echo "  FIXING: Zone file missing"
     mkdir -p coredns/zones
-    cat > "coredns/zones/db.${AGENTDNS_DOMAIN}" <<EOF
-\$ORIGIN ${AGENTDNS_DOMAIN}.
+    cat > "coredns/zones/db.${ROUTEROOT_DOMAIN}" <<EOF
+\$ORIGIN ${ROUTEROOT_DOMAIN}.
 \$TTL 300
 
-@       IN SOA  ns1.${AGENTDNS_DOMAIN}. admin.${AGENTDNS_DOMAIN}. (
+@       IN SOA  ns1.${ROUTEROOT_DOMAIN}. admin.${ROUTEROOT_DOMAIN}. (
                 $(date +%Y%m%d%H)  ; serial
                 3600        ; refresh
                 900         ; retry
@@ -174,23 +174,23 @@ if [ ! -f "coredns/zones/db.${AGENTDNS_DOMAIN}" ]; then
                 300         ; minimum TTL
 )
 
-@       IN NS   ns1.${AGENTDNS_DOMAIN}.
-@       IN NS   ns2.${AGENTDNS_DOMAIN}.
+@       IN NS   ns1.${ROUTEROOT_DOMAIN}.
+@       IN NS   ns2.${ROUTEROOT_DOMAIN}.
 
-ns1     IN A    ${AGENTDNS_SERVER_IP}
-ns2     IN A    ${AGENTDNS_SERVER_IP}
+ns1     IN A    ${ROUTEROOT_SERVER_IP}
+ns2     IN A    ${ROUTEROOT_SERVER_IP}
 
-@       IN A    ${AGENTDNS_SERVER_IP}
+@       IN A    ${ROUTEROOT_SERVER_IP}
 
-*       IN A    ${AGENTDNS_SERVER_IP}
+*       IN A    ${ROUTEROOT_SERVER_IP}
 EOF
     echo "  FIXED: Zone file created"
     FIXES=$((FIXES + 1))
 else
     # Check zone file has correct IP
-    if grep -q "IN A.*:" "coredns/zones/db.${AGENTDNS_DOMAIN}" 2>/dev/null; then
+    if grep -q "IN A.*:" "coredns/zones/db.${ROUTEROOT_DOMAIN}" 2>/dev/null; then
         echo "  FIXING: Zone file has IPv6 in A records"
-        sed -i "s/IN A    .*/IN A    ${AGENTDNS_SERVER_IP}/g" "coredns/zones/db.${AGENTDNS_DOMAIN}"
+        sed -i "s/IN A    .*/IN A    ${ROUTEROOT_SERVER_IP}/g" "coredns/zones/db.${ROUTEROOT_DOMAIN}"
         echo "  FIXED: Zone IPs updated"
         FIXES=$((FIXES + 1))
     else
@@ -241,7 +241,7 @@ if [ "$RUNNING" -lt 3 ] || [ "$FIXES" -gt 0 ]; then
     for i in $(seq 1 30); do
         if curl -sf http://localhost:8053/api/health >/dev/null 2>&1; then
             echo ""
-            echo "  OK: AgentDNS is healthy!"
+            echo "  OK: RouteRoot is healthy!"
             curl -sf http://localhost:8053/api/health 2>/dev/null | python3 -m json.tool 2>/dev/null || curl -sf http://localhost:8053/api/health
             echo ""
             exit 0

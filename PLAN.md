@@ -1,4 +1,4 @@
-# AgentDNS
+# RouteRoot
 
 A self-hosted DNS + deploy platform for instant preview deployments, demos, and API routing.
 Built for agentic development workflows where branches become live URLs in seconds.
@@ -8,7 +8,7 @@ Built for agentic development workflows where branches become live URLs in secon
 Deploying preview branches, demos, and staging environments requires manual DNS config,
 vendor dashboards (Cloudflare, Railway, Vercel), and per-project setup. We want:
 
-- `curl deploy.agentdns/deploy --data '{"repo":"...", "branch":"..."}'` → live URL in 60s
+- `curl deploy.routeroot/deploy --data '{"repo":"...", "branch":"..."}'` → live URL in 60s
 - Zero vendor dependencies for dev/demo infrastructure
 - Agentic CI/CD: Claude Code or any agent can deploy and verify branches autonomously
 
@@ -16,7 +16,7 @@ vendor dashboards (Cloudflare, Railway, Vercel), and per-project setup. We want:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Domain: *.agentdns.dev (or similar)                     │
+│  Domain: *.routeroot.dev (or similar)                     │
 │  Registrar NS → your server(s)                           │
 ├─────────────────────────────────────────────────────────┤
 │                                                          │
@@ -45,7 +45,7 @@ vendor dashboards (Cloudflare, Railway, Vercel), and per-project setup. We want:
 
 ### 1. CoreDNS (off-the-shelf)
 - Single Go binary, Kubernetes-proven
-- Wildcard `*.agentdns.dev → server IP` handles 99% of cases
+- Wildcard `*.routeroot.dev → server IP` handles 99% of cases
 - File-based zones with 5s auto-reload for custom records
 - Plugin: `file` for zone management, `log`, `errors`, `health`
 
@@ -73,7 +73,7 @@ GET    /api/health              System health (CoreDNS, Caddy, Docker, disk)
 3. Build Docker image
 4. Allocate port, start container with resource limits
 5. Register route in Caddy via admin API
-6. Return `https://{name}.agentdns.dev`
+6. Return `https://{name}.routeroot.dev`
 7. Background: health check loop, auto-expire after TTL
 
 **Tech:**
@@ -87,18 +87,18 @@ GET    /api/health              System health (CoreDNS, Caddy, Docker, disk)
 - Admin API at `:2019` for dynamic route registration
 - Validation endpoint: API confirms subdomain is a real deployment before cert issuance
 
-### 4. CLI (`agentdns`)
+### 4. CLI (`routeroot`)
 Thin Rust CLI that wraps the API.
 
 ```bash
-agentdns deploy <repo> [--branch <branch>] [--name <name>] [--ttl 48h]
-agentdns ls
-agentdns logs <name> [--follow]
-agentdns down <name>
-agentdns status
-agentdns record add <subdomain> <type> <value>
-agentdns record ls
-agentdns record rm <subdomain>
+routeroot deploy <repo> [--branch <branch>] [--name <name>] [--ttl 48h]
+routeroot ls
+routeroot logs <name> [--follow]
+routeroot down <name>
+routeroot status
+routeroot record add <subdomain> <type> <value>
+routeroot record ls
+routeroot record rm <subdomain>
 ```
 
 ### 5. GitHub Webhook Handler (in Agent API)
@@ -110,7 +110,7 @@ agentdns record rm <subdomain>
 ## Project Structure
 
 ```
-AgentDNS/
+RouteRoot/
 ├── PLAN.md
 ├── CLAUDE.md
 ├── docker-compose.yml          # Full stack: CoreDNS + Caddy + Agent API
@@ -143,7 +143,7 @@ AgentDNS/
 ├── coredns/
 │   ├── Corefile
 │   └── zones/
-│       └── db.agentdns.dev     # Zone template
+│       └── db.routeroot.dev     # Zone template
 ├── caddy/
 │   └── Caddyfile
 └── scripts/
@@ -157,17 +157,17 @@ All via environment variables:
 
 ```env
 # Required
-AGENTDNS_DOMAIN=agentdns.dev         # Your domain
-AGENTDNS_SERVER_IP=51.178.209.71     # Server public IP
-AGENTDNS_API_KEY=<random-secret>     # API auth
+ROUTEROOT_DOMAIN=routeroot.dev         # Your domain
+ROUTEROOT_SERVER_IP=51.178.209.71     # Server public IP
+ROUTEROOT_API_KEY=<random-secret>     # API auth
 
 # Optional
-AGENTDNS_MAX_DEPLOYMENTS=20          # Concurrent deployment limit
-AGENTDNS_DEFAULT_TTL=48h             # Auto-expire deployments
-AGENTDNS_MAX_MEMORY=2048             # MB per container
-AGENTDNS_MAX_CPUS=2                  # CPUs per container
-AGENTDNS_GITHUB_WEBHOOK_SECRET=...   # For auto-deploy on push
-AGENTDNS_CADDY_ADMIN=http://caddy:2019
+ROUTEROOT_MAX_DEPLOYMENTS=20          # Concurrent deployment limit
+ROUTEROOT_DEFAULT_TTL=48h             # Auto-expire deployments
+ROUTEROOT_MAX_MEMORY=2048             # MB per container
+ROUTEROOT_MAX_CPUS=2                  # CPUs per container
+ROUTEROOT_GITHUB_WEBHOOK_SECRET=...   # For auto-deploy on push
+ROUTEROOT_CADDY_ADMIN=http://caddy:2019
 ```
 
 ## Build Detection
@@ -208,16 +208,16 @@ The builder auto-detects how to build a repo:
 - [ ] Deploy target selection: auto (least-loaded) or manual (`--server eu-1`)
 - [ ] Agent worker on each server: receives build instructions from control plane
 - [ ] Server health monitoring + auto-failover
-- [ ] Add server: `agentdns server add --name eu-hetzner-1 --ip x.x.x.x --region eu`
+- [ ] Add server: `routeroot server add --name eu-hetzner-1 --ip x.x.x.x --region eu`
 - [ ] DNS records dynamically point subdomains to the server hosting that deployment
-- [ ] Wildcard per-server: `*.eu.agentdns.dev`, `*.us.agentdns.dev`
+- [ ] Wildcard per-server: `*.eu.routeroot.dev`, `*.us.routeroot.dev`
 
 ### Phase 4: Polish
 - [ ] Health dashboard (simple HTML page at root domain)
 - [ ] Resource usage tracking per deployment
 - [ ] Deploy notifications (optional webhook/slack)
 - [ ] Custom domain mapping (point any domain at a deployment)
-- [ ] Deployment promotion: `agentdns promote staging → production`
+- [ ] Deployment promotion: `routeroot promote staging → production`
 
 ## Multi-Server Architecture
 
@@ -225,7 +225,7 @@ The builder auto-detects how to build a repo:
                      ┌──────────────────────┐
                      │  Control Plane        │
                      │  (Agent API + CoreDNS)│
-                     │  agentdns.dev NS      │
+                     │  routeroot.dev NS      │
                      └──────────┬───────────┘
                                 │ orchestrates
               ┌─────────────────┼─────────────────┐
@@ -243,16 +243,16 @@ The builder auto-detects how to build a repo:
 2. Selects target server (auto: least-loaded in nearest region, or manual)
 3. Sends build+run instruction to agent worker on that server via authenticated API
 4. Worker clones, builds, runs container, configures local Caddy
-5. Control plane updates DNS: `myapp.agentdns.dev A → target server IP`
+5. Control plane updates DNS: `myapp.routeroot.dev A → target server IP`
 6. CoreDNS serves the record, traffic goes directly to the worker server
 
 **Adding a new Hetzner box:**
 ```bash
 # On the new server:
-curl -sSL https://raw.githubusercontent.com/Vibeyard/AgentDNS/main/scripts/setup-worker.sh | bash
+curl -sSL https://raw.githubusercontent.com/Vibeyard/RouteRoot/main/scripts/setup-worker.sh | bash
 
 # From control plane:
-agentdns server add --name eu-hetzner-3 --ip 65.x.x.z --region eu-central
+routeroot server add --name eu-hetzner-3 --ip 65.x.x.z --region eu-central
 ```
 
 Each worker runs Caddy + Docker + a thin agent worker service.

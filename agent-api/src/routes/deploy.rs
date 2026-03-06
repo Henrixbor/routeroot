@@ -56,7 +56,7 @@ pub async fn create_plan(
 
     let actions = serde_json::json!([
         {"action": "clone_repo", "repo": req.repo, "branch": branch},
-        {"action": "build_image", "tag": format!("agentdns-{name}:latest")},
+        {"action": "build_image", "tag": format!("routeroot-{name}:latest")},
         {"action": "create_container", "name": name, "port": port, "memory_mb": state.config.max_memory_mb, "cpus": state.config.max_cpus},
         {"action": "add_proxy_route", "subdomain": name, "target_port": port},
         {"action": "verify_deployment", "url": url, "dns_check": true, "http_check": true},

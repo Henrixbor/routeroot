@@ -18,23 +18,23 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Self {
         Self {
-            domain: env::var("AGENTDNS_DOMAIN").unwrap_or_else(|_| "routeroot.dev".into()),
-            server_ip: env::var("AGENTDNS_SERVER_IP").unwrap_or_else(|_| "127.0.0.1".into()),
-            api_key: env::var("AGENTDNS_API_KEY").unwrap_or_else(|_| "dev-key".into()),
-            max_deployments: env::var("AGENTDNS_MAX_DEPLOYMENTS")
+            domain: env::var("ROUTEROOT_DOMAIN").unwrap_or_else(|_| "routeroot.dev".into()),
+            server_ip: env::var("ROUTEROOT_SERVER_IP").unwrap_or_else(|_| "127.0.0.1".into()),
+            api_key: env::var("ROUTEROOT_API_KEY").unwrap_or_else(|_| "dev-key".into()),
+            max_deployments: env::var("ROUTEROOT_MAX_DEPLOYMENTS")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(20),
             default_ttl_secs: parse_duration_secs(
-                &env::var("AGENTDNS_DEFAULT_TTL").unwrap_or_else(|_| "48h".into())
+                &env::var("ROUTEROOT_DEFAULT_TTL").unwrap_or_else(|_| "48h".into())
             ),
-            max_memory_mb: env::var("AGENTDNS_MAX_MEMORY")
+            max_memory_mb: env::var("ROUTEROOT_MAX_MEMORY")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(2048),
-            max_cpus: env::var("AGENTDNS_MAX_CPUS")
+            max_cpus: env::var("ROUTEROOT_MAX_CPUS")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(2),
-            caddy_admin_url: env::var("AGENTDNS_CADDY_ADMIN")
+            caddy_admin_url: env::var("ROUTEROOT_CADDY_ADMIN")
                 .unwrap_or_else(|_| "http://localhost:2019".into()),
-            github_webhook_secret: env::var("AGENTDNS_GITHUB_WEBHOOK_SECRET").ok(),
+            github_webhook_secret: env::var("ROUTEROOT_GITHUB_WEBHOOK_SECRET").ok(),
             database_path: env::var("DATABASE_PATH")
-                .unwrap_or_else(|_| "/data/agentdns.db".into()),
+                .unwrap_or_else(|_| "/data/routeroot.db".into()),
             zone_file_path: env::var("ZONE_FILE_PATH")
                 .unwrap_or_else(|_| "/dns-zones/db.routeroot.dev".into()),
         }

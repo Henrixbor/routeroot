@@ -7,5 +7,5 @@ RUN touch src/main.rs && cargo build --release
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/agentdns-mcp /usr/local/bin/agentdns-mcp
-CMD ["agentdns-mcp"]
+COPY --from=builder /app/target/release/routeroot-mcp /usr/local/bin/routeroot-mcp
+CMD ["routeroot-mcp"]

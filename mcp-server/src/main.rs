@@ -52,8 +52,8 @@ struct Config {
 impl Config {
     fn from_env() -> Self {
         Self {
-            api_url: env::var("AGENTDNS_URL").unwrap_or_else(|_| "http://localhost:8053".into()),
-            api_key: env::var("AGENTDNS_API_KEY").unwrap_or_else(|_| "dev-key".into()),
+            api_url: env::var("ROUTEROOT_URL").unwrap_or_else(|_| "http://localhost:8053".into()),
+            api_key: env::var("ROUTEROOT_API_KEY").unwrap_or_else(|_| "dev-key".into()),
         }
     }
 }
@@ -70,7 +70,7 @@ async fn api_request(
     body: Option<Value>,
 ) -> Result<Value, String> {
     let url = format!("{}{}", cfg.api_url, path);
-    eprintln!("[agentdns-mcp] {} {}", method, url);
+    eprintln!("[routeroot-mcp] {} {}", method, url);
 
     let builder = match method {
         "GET" => client.get(&url),
@@ -122,7 +122,7 @@ fn tool_definitions() -> Value {
             },
             {
                 "name": "list_deployments",
-                "description": "List all active AgentDNS deployments.",
+                "description": "List all active RouteRoot deployments.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {}
@@ -130,7 +130,7 @@ fn tool_definitions() -> Value {
             },
             {
                 "name": "get_deployment",
-                "description": "Get details of a specific AgentDNS deployment.",
+                "description": "Get details of a specific RouteRoot deployment.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -141,7 +141,7 @@ fn tool_definitions() -> Value {
             },
             {
                 "name": "teardown",
-                "description": "Tear down an AgentDNS deployment.",
+                "description": "Tear down an RouteRoot deployment.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -152,7 +152,7 @@ fn tool_definitions() -> Value {
             },
             {
                 "name": "get_logs",
-                "description": "Get container logs for an AgentDNS deployment.",
+                "description": "Get container logs for an RouteRoot deployment.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -163,7 +163,7 @@ fn tool_definitions() -> Value {
             },
             {
                 "name": "create_dns_record",
-                "description": "Create a custom DNS record via AgentDNS.",
+                "description": "Create a custom DNS record via RouteRoot.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -176,7 +176,7 @@ fn tool_definitions() -> Value {
             },
             {
                 "name": "list_dns_records",
-                "description": "List all custom DNS records managed by AgentDNS.",
+                "description": "List all custom DNS records managed by RouteRoot.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {}
@@ -184,7 +184,7 @@ fn tool_definitions() -> Value {
             },
             {
                 "name": "delete_dns_record",
-                "description": "Delete a DNS record from AgentDNS.",
+                "description": "Delete a DNS record from RouteRoot.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -195,7 +195,7 @@ fn tool_definitions() -> Value {
             },
             {
                 "name": "health",
-                "description": "Check AgentDNS system health.",
+                "description": "Check RouteRoot system health.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {}
@@ -413,7 +413,7 @@ async fn handle_request(
                     "tools": {}
                 },
                 "serverInfo": {
-                    "name": "agentdns-mcp",
+                    "name": "routeroot-mcp",
                     "version": "0.1.0"
                 }
             });
@@ -425,7 +425,7 @@ async fn handle_request(
         }
 
         "notifications/initialized" => {
-            eprintln!("[agentdns-mcp] client initialized");
+            eprintln!("[routeroot-mcp] client initialized");
             None // notifications have no response
         }
 
@@ -442,7 +442,7 @@ async fn handle_request(
             let tool_name = req.params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let arguments = req.params.get("arguments").cloned().unwrap_or(json!({}));
 
-            eprintln!("[agentdns-mcp] calling tool: {} with args: {}", tool_name, arguments);
+            eprintln!("[routeroot-mcp] calling tool: {} with args: {}", tool_name, arguments);
 
             match call_tool(client, cfg, tool_name, &arguments).await {
                 Ok(val) => {
@@ -458,7 +458,7 @@ async fn handle_request(
                     }))
                 }
                 Err(e) => {
-                    eprintln!("[agentdns-mcp] tool error: {}", e);
+                    eprintln!("[routeroot-mcp] tool error: {}", e);
                     Some(json!({
                         "jsonrpc": "2.0",
                         "id": req.id,
@@ -495,7 +495,7 @@ async fn handle_request(
                 }))
             } else {
                 // Unknown notification — ignore
-                eprintln!("[agentdns-mcp] ignoring unknown notification: {}", req.method);
+                eprintln!("[routeroot-mcp] ignoring unknown notification: {}", req.method);
                 None
             }
         }
@@ -508,10 +508,10 @@ async fn handle_request(
 
 #[tokio::main]
 async fn main() {
-    eprintln!("[agentdns-mcp] starting MCP server (stdio transport)");
+    eprintln!("[routeroot-mcp] starting MCP server (stdio transport)");
 
     let cfg = Config::from_env();
-    eprintln!("[agentdns-mcp] API URL: {}", cfg.api_url);
+    eprintln!("[routeroot-mcp] API URL: {}", cfg.api_url);
 
     let client = reqwest::Client::new();
     let stdin = io::stdin();
@@ -521,7 +521,7 @@ async fn main() {
         let line = match line {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("[agentdns-mcp] stdin read error: {}", e);
+                eprintln!("[routeroot-mcp] stdin read error: {}", e);
                 break;
             }
         };
@@ -531,12 +531,12 @@ async fn main() {
             continue;
         }
 
-        eprintln!("[agentdns-mcp] <- {}", trimmed);
+        eprintln!("[routeroot-mcp] <- {}", trimmed);
 
         let req: JsonRpcRequest = match serde_json::from_str(trimmed) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[agentdns-mcp] parse error: {}", e);
+                eprintln!("[routeroot-mcp] parse error: {}", e);
                 let err = json!({
                     "jsonrpc": "2.0",
                     "id": null,
@@ -554,12 +554,12 @@ async fn main() {
 
         if let Some(response) = handle_request(&client, &cfg, &req).await {
             let response_str = serde_json::to_string(&response).unwrap();
-            eprintln!("[agentdns-mcp] -> {}", response_str);
+            eprintln!("[routeroot-mcp] -> {}", response_str);
             let mut out = stdout.lock();
             let _ = writeln!(out, "{}", response_str);
             let _ = out.flush();
         }
     }
 
-    eprintln!("[agentdns-mcp] shutting down");
+    eprintln!("[routeroot-mcp] shutting down");
 }

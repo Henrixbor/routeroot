@@ -1,4 +1,4 @@
-# AgentDNS
+# RouteRoot
 
 Self-hosted DNS + deploy platform for instant preview deployments and demos.
 Designed for AI agents to configure DNS and spin up live branch demos autonomously.
@@ -80,11 +80,11 @@ Add to your Claude Code MCP config (`~/.claude/mcp.json`):
 ```json
 {
   "mcpServers": {
-    "agentdns": {
-      "command": "/path/to/agentdns-mcp",
+    "routeroot": {
+      "command": "/path/to/routeroot-mcp",
       "env": {
-        "AGENTDNS_URL": "http://your-server:8053",
-        "AGENTDNS_API_KEY": "your-api-key"
+        "ROUTEROOT_URL": "http://your-server:8053",
+        "ROUTEROOT_API_KEY": "your-api-key"
       }
     }
   }
@@ -100,7 +100,7 @@ MCP Tools available (15):
 
 ## Project Layout
 - `agent-api/` — Rust Axum HTTP service (the brain)
-- `cli/` — Rust CLI tool (`agentdns`)
+- `cli/` — Rust CLI tool (`routeroot`)
 - `mcp-server/` — MCP server for AI agent integration (stdio transport)
 - `coredns/` — CoreDNS config and zone files
 - `caddy/` — Caddyfile

@@ -2,14 +2,14 @@ use clap::{Parser, Subcommand};
 use serde::Deserialize;
 
 #[derive(Parser)]
-#[command(name = "agentdns", about = "AgentDNS CLI — deploy branches as live URLs")]
+#[command(name = "routeroot", about = "RouteRoot CLI — deploy branches as live URLs")]
 struct Cli {
     /// API server URL
-    #[arg(long, env = "AGENTDNS_URL", default_value = "http://localhost:8053")]
+    #[arg(long, env = "ROUTEROOT_URL", default_value = "http://localhost:8053")]
     server: String,
 
     /// API key
-    #[arg(long, env = "AGENTDNS_API_KEY", default_value = "dev-key")]
+    #[arg(long, env = "ROUTEROOT_API_KEY", default_value = "dev-key")]
     key: String,
 
     #[command(subcommand)]
@@ -190,7 +190,7 @@ fn main() {
                         }
                     }
                     println!();
-                    println!("To apply: agentdns apply {}", plan.id);
+                    println!("To apply: routeroot apply {}", plan.id);
                 }
                 Err(e) => eprintln!("Error: {e}"),
             }
