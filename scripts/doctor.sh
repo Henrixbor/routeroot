@@ -23,24 +23,57 @@ else
     echo "  OK: .env found (domain=$AGENTDNS_DOMAIN)"
 fi
 
-# --- Check systemd-resolved conflict ---
-if ss -tlnp 2>/dev/null | grep -q "systemd-resolve.*:53"; then
-    echo "  FIXING: systemd-resolved is using port 53"
-    systemctl stop systemd-resolved 2>/dev/null || true
-    systemctl disable systemd-resolved 2>/dev/null || true
-    if [ ! -f /etc/resolv.conf.bak ]; then
-        cp /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
+# --- Check port conflicts (53, 80, 443) ---
+fix_port() {
+    local PORT=$1
+    local PIDS
+    PIDS=$(ss -tlnp 2>/dev/null | grep ":${PORT} " | grep -v docker | grep -oP 'pid=\K[0-9]+' | sort -u)
+    if [ -z "$PIDS" ]; then
+        echo "  OK: Port $PORT available"
+        return
     fi
-    echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-    echo "  FIXED: systemd-resolved disabled, using 8.8.8.8"
-    FIXES=$((FIXES + 1))
-elif ss -tlnp 2>/dev/null | grep -v docker | grep -q ":53 "; then
-    echo "  WARN: Something other than Docker is using port 53"
-    ss -tlnp | grep ":53 "
-else
-    echo "  OK: Port 53 available"
-fi
+
+    for PID in $PIDS; do
+        local PROC
+        PROC=$(ps -p "$PID" -o comm= 2>/dev/null || echo "unknown")
+        echo "  FIXING: Port $PORT used by $PROC (pid $PID)"
+
+        case "$PROC" in
+            systemd-resolve*)
+                systemctl stop systemd-resolved 2>/dev/null || true
+                systemctl disable systemd-resolved 2>/dev/null || true
+                echo "nameserver 8.8.8.8" > /etc/resolv.conf
+                echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+                echo "  FIXED: systemd-resolved disabled"
+                ;;
+            nginx*)
+                systemctl stop nginx 2>/dev/null || true
+                systemctl disable nginx 2>/dev/null || true
+                echo "  FIXED: nginx stopped"
+                ;;
+            apache*|httpd*)
+                systemctl stop apache2 2>/dev/null || systemctl stop httpd 2>/dev/null || true
+                systemctl disable apache2 2>/dev/null || systemctl disable httpd 2>/dev/null || true
+                echo "  FIXED: apache stopped"
+                ;;
+            caddy*)
+                systemctl stop caddy 2>/dev/null || true
+                systemctl disable caddy 2>/dev/null || true
+                echo "  FIXED: system caddy stopped"
+                ;;
+            *)
+                kill "$PID" 2>/dev/null || true
+                sleep 1
+                echo "  FIXED: killed $PROC ($PID)"
+                ;;
+        esac
+        FIXES=$((FIXES + 1))
+    done
+}
+
+fix_port 53
+fix_port 80
+fix_port 443
 
 # --- Check Corefile has actual domain (not env var placeholder) ---
 if grep -q '{\$AGENTDNS_DOMAIN' coredns/Corefile 2>/dev/null; then

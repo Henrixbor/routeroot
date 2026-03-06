@@ -186,14 +186,54 @@ else
     echo "[6/7] Firewall (skipped)"
 fi
 
-# --- Free port 53 if systemd-resolved is hogging it ---
-if ss -tlnp 2>/dev/null | grep -q "systemd-resolve.*:53"; then
-    echo "  Disabling systemd-resolved (conflicts with port 53)..."
-    systemctl stop systemd-resolved 2>/dev/null || true
-    systemctl disable systemd-resolved 2>/dev/null || true
-    echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-fi
+# --- Free required ports (53, 80, 443) ---
+free_port() {
+    local PORT=$1
+    local PIDS
+    PIDS=$(ss -tlnp 2>/dev/null | grep ":${PORT} " | grep -oP 'pid=\K[0-9]+' | sort -u)
+    if [ -z "$PIDS" ]; then return; fi
+
+    for PID in $PIDS; do
+        local PROC
+        PROC=$(ps -p "$PID" -o comm= 2>/dev/null || echo "unknown")
+        echo "  Port $PORT in use by $PROC (pid $PID)"
+
+        case "$PROC" in
+            systemd-resolve*)
+                echo "  -> Disabling systemd-resolved..."
+                systemctl stop systemd-resolved 2>/dev/null || true
+                systemctl disable systemd-resolved 2>/dev/null || true
+                echo "nameserver 8.8.8.8" > /etc/resolv.conf
+                echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+                ;;
+            nginx*)
+                echo "  -> Stopping nginx..."
+                systemctl stop nginx 2>/dev/null || true
+                systemctl disable nginx 2>/dev/null || true
+                ;;
+            apache*|httpd*)
+                echo "  -> Stopping apache..."
+                systemctl stop apache2 2>/dev/null || systemctl stop httpd 2>/dev/null || true
+                systemctl disable apache2 2>/dev/null || systemctl disable httpd 2>/dev/null || true
+                ;;
+            caddy*)
+                echo "  -> Stopping system caddy (we use our own in Docker)..."
+                systemctl stop caddy 2>/dev/null || true
+                systemctl disable caddy 2>/dev/null || true
+                ;;
+            *)
+                echo "  -> Killing process $PID ($PROC)..."
+                kill "$PID" 2>/dev/null || true
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+echo "  Checking required ports..."
+free_port 53
+free_port 80
+free_port 443
 
 # --- Step 7: Build and start ---
 echo "[7/7] Building and starting..."
